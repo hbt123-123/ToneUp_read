@@ -1,0 +1,66 @@
+{
+  "pages": [
+    {
+      "path": "pages/home/home",
+      "style": { "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/reading/reading",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/article/article",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/plan/plan",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/vocab/vocab",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/review/review",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/mine/mine",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/quiz/quiz",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/wrong/wrong",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/export/export",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/model-form/model-form",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/translate-form/translate-form",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/tts-form/tts-form",
+      "style": { "navigationStyle": "custom" }
+    }
+  ],
+  "entryPagePath": "pages/home/home",
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "一潼上岸·阅读",
+    "navigationBarBackgroundColor": "#F2F0F7",
+    "backgroundColor": "#F2F0F7",
+    "animationType": "pop-in",
+    "animationDuration": 280
+  }
+}
