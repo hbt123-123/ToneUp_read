@@ -19,11 +19,18 @@ class LlmService {
     return (br > limit ~/ 2 ? cut.substring(0, br) : cut).trim();
   }
 
+  /// 走翻译网关（OpenAI 兼容）的一次对话调用。
   Future<String> chat(String system, String user, {double temperature = 0.7}) async {
-    final p = _cfg.currentProfile;
-    final url = '${p.baseUrl}/chat/completions';
+    final key = _cfg.gatewayKey.trim();
+    if (key.isEmpty) {
+      throw AppException(
+        'llmKey',
+        '尚未配置翻译网关密钥，请到「我的 → 服务配置」填写网关密钥',
+      );
+    }
+    final url = '${_cfg.gatewayBase}/v1/chat/completions';
     final body = {
-      'model': p.model,
+      'model': _cfg.gatewayModel,
       'messages': [
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': user},
@@ -32,9 +39,9 @@ class LlmService {
     };
     final Map<String, dynamic> res;
     try {
-      res = await _http.postJson(url, body, headers: {'Authorization': 'Bearer ${p.apiKey}'}, retry: RetryPolicy.manual);
+      res = await _http.postJson(url, body, headers: {'Authorization': 'Bearer $key'}, retry: RetryPolicy.manual);
     } on AppException catch (e) {
-      throw _readable(e, p);
+      throw _readable(e);
     }
     final choices = res['choices'];
     if (choices is! List || choices.isEmpty) {
@@ -53,22 +60,22 @@ class LlmService {
     return content;
   }
 
-  AppException _readable(AppException e, LlmProfile p) {
+  AppException _readable(AppException e) {
     switch (e.code) {
       case 'http401':
-        return AppException('llmKey', 'api key 无效或已失效（401），请在「我的 → LLM 模型」里检查', detail: e.detail, status: e.status);
+        return AppException('llmKey', '网关密钥无效或已失效（401），请到「我的 → 服务配置」检查网关密钥', detail: e.detail, status: e.status);
       case 'http403':
-        return AppException('llmKey', '接口拒绝访问（403），请在「我的 → LLM 模型」里检查 key 与 base url', detail: e.detail, status: e.status);
+        return AppException('llmKey', '网关拒绝访问（403），请到「我的 → 服务配置」检查网关密钥与地址', detail: e.detail, status: e.status);
       case 'http404':
-        return AppException('llmUrl', '接口地址不存在（404），请检查 base url 是否写全', detail: e.detail, status: e.status);
+        return AppException('llmUrl', '网关地址不存在（404），请检查网关地址是否写全', detail: e.detail, status: e.status);
       case 'http429':
-        return AppException('llmRate', '模型接口被限流（429），内置模型是共享额度，建议配置自己的模型', detail: e.detail, status: e.status, retryable: true);
+        return AppException('llmRate', '翻译网关被限流（429），请稍后再试', detail: e.detail, status: e.status, retryable: true);
       case 'badJson':
       case 'emptyBody':
         return AppException('llmFormat', '模型返回的不是预期内容', detail: e.detail);
     }
     if (e.retryable) {
-      return AppException(e.code, '${e.message}（模型：${p.name}）', detail: e.detail, status: e.status, retryable: true);
+      return AppException(e.code, '${e.message}（网关：${_cfg.gatewayBase}）', detail: e.detail, status: e.status, retryable: true);
     }
     return e;
   }

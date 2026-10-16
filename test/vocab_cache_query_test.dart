@@ -7,6 +7,11 @@ import 'package:toneup_read/services/vocab_service.dart';
 
 import 'fake_db.dart';
 
+/// 词卡缓存的现行结构（对齐 DictService.lookupCombined 冻结 shape）。
+String _cachedCard(String word) =>
+    '{"kind":"dict","found":true,"word":"$word","phonetic":"ˈprɪvəsi",'
+    '"senses":[{"pos":"n.","definition":"隐私","en":"the state of being private"}]}';
+
 class _Rec extends FakeDb {
   final List<String> log = [];
   static const heads = 120;
@@ -23,7 +28,7 @@ class _Rec extends FakeDb {
     if (sql.contains('FROM vocab_occ')) return [];
     if (sql.contains('FROM word_cache')) {
       final first = (params ?? []).isNotEmpty ? '${params!.first}' : 'x';
-      return [<String, dynamic>{'word': first, 'lemma': first, 'result': '{"kind":"dict"}'}];
+      return [<String, dynamic>{'word': first, 'lemma': first, 'result': _cachedCard(first)}];
     }
     return [];
   }
@@ -36,7 +41,7 @@ List<String> _cacheSql(_Rec db) => db.log.where((s) => s.contains('FROM word_cac
 void main() {
   test('getHeads 按批读取 result，不再一次全表拉取', () async {
     final db = _Rec();
-    await _svc(db).getHeads();
+    final heads = await _svc(db).getHeads();
 
     final qs = _cacheSql(db);
     expect(qs, isNotEmpty);
@@ -45,6 +50,11 @@ void main() {
     }
     expect(qs.any((q) => q.trim() == 'SELECT word, lemma, result FROM word_cache'), isFalse);
     expect(qs.length, 2, reason: '120 个词应分成 100 + 20 两批');
+
+    // 缓存是现行 dict 卡片 JSON：zh 取首个义项的 definition（中文），不再是裸 text 字段。
+    final w0 = heads.firstWhere((h) => h['head'] == 'w0');
+    expect(w0['zh'], '隐私', reason: 'dict 卡片的中文释义应取 senses[0].definition');
+    expect(heads.firstWhere((h) => h['head'] == 'w100')['zh'], '隐私', reason: '第二批同样要解析出 zh');
   });
 
   test('getHeads 对 vocab_occ 只做聚合，不再整表拉取', () async {

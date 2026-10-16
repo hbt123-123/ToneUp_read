@@ -6,7 +6,7 @@ import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 底部 TabBar，逐项对齐原 `BottomNav.vue`：
-/// 5 个 Tab（首页/阅读/计划/词汇/我的），玻璃底 + 圆角胶囊，选中态 primary95 底、主色图标与文字。
+/// 4 个 Tab（首页/词汇/句子/我的），玻璃底 + 圆角胶囊，选中态 primary95 底、主色图标与文字。
 class BottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -14,9 +14,8 @@ class BottomNav extends StatelessWidget {
 
   static const _tabs = [
     (key: 'home', text: '首页'),
-    (key: 'reading', text: '阅读'),
-    (key: 'plan', text: '计划'),
     (key: 'words', text: '词汇'),
+    (key: 'sentence', text: '句子'),
     (key: 'mine', text: '我的'),
   ];
 

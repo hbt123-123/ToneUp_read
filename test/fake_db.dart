@@ -6,6 +6,9 @@ class FakeDb extends DbService {
   Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async => [];
   @override
   Future<void> execute(String sql, [List<Object?>? params]) async {}
+  // 兜底：不覆写会落到 DbService 真开 sqflite（单测里必炸）。默认当作"新插入"。
+  @override
+  Future<int> insertReturnId(String sql, [List<Object?>? params]) async => 1;
   @override
   Future<void> clearCache() async {}
   @override

@@ -5,16 +5,10 @@ import 'package:toneup_read/widgets/go_ui.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/widgets/bottom_nav.dart';
 import 'package:toneup_read/screens/home_screen.dart';
-import 'package:toneup_read/screens/reading_screen.dart';
-import 'package:toneup_read/screens/plan_screen.dart';
 import 'package:toneup_read/screens/vocab_screen.dart';
+import 'package:toneup_read/screens/sentence_screen.dart';
 import 'package:toneup_read/screens/mine_screen.dart';
 import 'package:toneup_read/screens/article_screen.dart';
-import 'package:toneup_read/screens/quiz_screen.dart';
-import 'package:toneup_read/screens/wrong_screen.dart';
-import 'package:toneup_read/screens/export_screen.dart';
-import 'package:toneup_read/screens/model_form_screen.dart';
-import 'package:toneup_read/screens/translate_form_screen.dart';
 
 class MyApp extends ConsumerStatefulWidget {
   const MyApp({super.key});
@@ -23,12 +17,11 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class _MyAppState extends ConsumerState<MyApp> {
-  // Tab 顺序对齐原 BottomNav.vue：首页 / 阅读 / 计划 / 词汇 / 我的
+  // Tab 顺序对齐 BottomNav：首页 / 词汇 / 句子 / 我的
   static const _tabs = <Widget>[
     HomeScreen(),
-    ReadingScreen(),
-    PlanScreen(),
     VocabScreen(),
+    SentenceScreen(),
     MineScreen(),
   ];
 
@@ -48,11 +41,6 @@ class _MyAppState extends ConsumerState<MyApp> {
       ),
       routes: {
         '/article': (c) => const ArticleScreen(),
-        '/quiz': (c) => const QuizScreen(),
-        '/wrong': (c) => const WrongScreen(),
-        '/export': (c) => const ExportScreen(),
-        '/model-form': (c) => const ModelFormScreen(),
-        '/translate-form': (c) => const TranslateFormScreen(),
       },
     );
   }

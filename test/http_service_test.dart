@@ -1,79 +1,25 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/services/http_service.dart';
-
-Future<AppConfigService> _config({String ua = '', String extra = ''}) async {
-  SharedPreferences.setMockInitialValues({});
-  final cfg = AppConfigService();
-  await cfg.init();
-  await cfg.setFetchOptions(userAgent: ua, extraHeaders: extra);
-  return cfg;
-}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('抓取请求带内置默认 UA，且附加头支持 {url}/{host} 占位符', () async {
-    late http.Request seen;
-    final svc = HttpService(
-      client: MockClient((req) async {
-        seen = req;
-        return http.Response('<html><body>ok</body></html>', 200);
-      }),
-      config: await _config(ua: 'MyUA/1.0', extra: '{"Referer":"{url}","X-Host":"{host}"}'),
-    );
-
-    await svc.getText('https://example.com/a/b');
-
-    expect(seen.headers['User-Agent'], 'MyUA/1.0');
-    expect(seen.headers['Referer'], 'https://example.com/a/b');
-    expect(seen.headers['X-Host'], 'example.com');
-    expect(seen.headers['Accept'], isNotEmpty);
-  });
-
-  test('未配置时使用内置默认 UA', () async {
-    late http.Request seen;
-    final svc = HttpService(
-      client: MockClient((req) async {
-        seen = req;
-        return http.Response('ok', 200);
-      }),
-      config: await _config(),
-    );
-    await svc.getText('https://example.com/');
-    expect(seen.headers['User-Agent'], AppConfigService.defaultUserAgent);
-  });
-
-  test('附加头不是合法 JSON 时静默忽略，不影响请求', () async {
-    late http.Request seen;
-    final svc = HttpService(
-      client: MockClient((req) async {
-        seen = req;
-        return http.Response('ok', 200);
-      }),
-      config: await _config(extra: 'not-json'),
-    );
-    await svc.getText('https://example.com/');
-    expect(seen.headers['User-Agent'], AppConfigService.defaultUserAgent);
-  });
-
-  test('接口请求（LLM/翻译）不带 UA', () async {
+  test('接口请求（LLM/翻译）带 JSON 头且不带 UA', () async {
     late http.Request seen;
     final svc = HttpService(
       client: MockClient((req) async {
         seen = req;
         return http.Response('{"ok":true}', 200, headers: {'content-type': 'application/json'});
       }),
-      config: await _config(ua: 'MyUA/1.0'),
     );
     await svc.getJson('https://api.example.com/v1/models');
     expect(seen.headers.containsKey('user-agent'), isFalse);
     expect(seen.headers['Accept'], 'application/json');
+    expect(seen.headers['Content-Type'], 'application/json');
   });
 
   test('403 不重试并给出可读原因', () async {
@@ -184,6 +130,38 @@ void main() {
       svc.getJson('https://api.example.com/chat'),
       throwsA(isA<AppException>().having((e) => e.code, 'code', 'badJson')),
     );
+  });
+
+  group('getJsonAny：顶层可以是数组或对象（词典 /dict 与 /en/<word> 两种形态）', () {
+    test('顶层数组可解析', () async {
+      final svc = HttpService(client: MockClient((req) async => http.Response('[{"word":"a"},2]', 200)));
+      final v = await svc.getJsonAny('https://api.example.com/en/a');
+      expect(v, isA<List<dynamic>>());
+      expect((v as List).first, {'word': 'a'});
+    });
+
+    test('顶层对象可解析', () async {
+      final svc = HttpService(client: MockClient((req) async => http.Response('{"kind":"dict"}', 200)));
+      final v = await svc.getJsonAny('https://api.example.com/dict');
+      expect(v, isA<Map<String, dynamic>>());
+      expect(v['kind'], 'dict');
+    });
+
+    test('坏 JSON 抛 badJson', () async {
+      final svc = HttpService(client: MockClient((req) async => http.Response('<html>oops</html>', 200)));
+      await expectLater(
+        svc.getJsonAny('https://api.example.com/dict'),
+        throwsA(isA<AppException>().having((e) => e.code, 'code', 'badJson')),
+      );
+    });
+
+    test('空 body 抛 emptyBody', () async {
+      final svc = HttpService(client: MockClient((req) async => http.Response('', 200)));
+      await expectLater(
+        svc.getJsonAny('https://api.example.com/dict'),
+        throwsA(isA<AppException>().having((e) => e.code, 'code', 'emptyBody')),
+      );
+    });
   });
 
   test('约定的重试参数被固定下来', () {

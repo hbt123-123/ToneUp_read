@@ -3,23 +3,23 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/services/tts_service.dart';
-import 'package:toneup_read/services/translate_service.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ArticleScreen extends ConsumerStatefulWidget {
   final int? articleId;
   final String? guid;
   final String? title;
-  final bool quiz;
   final int focusPara;
   final int focusTok;
-  const ArticleScreen({super.key, this.articleId, this.guid, this.title, this.quiz = false, this.focusPara = -1, this.focusTok = -1});
+  const ArticleScreen({super.key, this.articleId, this.guid, this.title, this.focusPara = -1, this.focusTok = -1});
 
   /// 选区文本 → 查询文本。
   /// 单个词：削掉单词周围的标点（`word,` → `word`）；
@@ -51,6 +51,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   String _guid = '';
   int _articleId = 0;
   String _sourceUrl = '';
+  String _source = ''; // 云端来源名（articles.source），优先于 sourceUrl 的 host
+  String _status = ''; // 'gone' 表示源已下线，仅显示本地缓存
+  int? _publishedAt; // 毫秒时间戳
+  int? _cachedAt; // 毫秒时间戳
   int _wordCount = 0;
   bool _loading = true;
   String _error = '';
@@ -78,7 +82,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   int _flashPara = -1;
   int _flashTok = -1;
   final _scrollCtrl = ScrollController();
-  bool _readAwarded = false; // 本文“读完”见闻是否已发放
   final Map<int, int> _imgRetry = {}; // blockIndex -> retry count
   final Set<int> _imgErr = {};
   final Map<int, GlobalKey> _paraKeys = {};
@@ -108,24 +111,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     });
   }
 
-  /// 读完一篇文章 → 见闻 +30（按 guid 每天只计一次）。
-  /// 判定：滚动到文末（留有 24px 余量）；若正文短于视口、无从滚动则视为已读完。
-  void _maybeAwardRead(ScrollMetrics m) {
-    if (_readAwarded) return;
-    if (m.maxScrollExtent <= 0 || m.pixels >= m.maxScrollExtent - 24) {
-      _readAwarded = true;
-      ref.read(habitProvider).awardRead(_guid).then((ok) {
-        if (ok) ref.read(habitRevisionProvider.notifier).bump();
-      });
-    }
-  }
-
-  /// 收藏一个词/句 → 见闻 +1（单篇封顶 +10，在服务层处理）。
-  void _awardCollect() {
-    ref.read(habitProvider).awardCollect(_guid);
-    ref.read(habitRevisionProvider.notifier).bump();
-  }
-
   @override
   void dispose() {
     // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行）
@@ -144,8 +129,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     });
     try {
       final db = ref.read(dbProvider);
-      // 不取 html：阅读器只用 plainText/blocks。
-      const cols = 'id, title, sourceUrl, wordCount, plainText, blocks';
+      // 不取 html：阅读器只用 plainText/blocks；source/publishedAt 等云端元信息供页头展示。
+      const cols =
+          'id, title, sourceUrl, wordCount, plainText, blocks, source, publishedAt, expiresAt, cachedAt, status, summary, remoteId';
       Map<String, dynamic>? row;
       if (_id != null) {
         row = await _first(db, 'SELECT $cols FROM articles WHERE id = ?', [_id]);
@@ -174,6 +160,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     _articleId = row['id'] as int? ?? 0;
     _plain = row['plainText'] as String? ?? '';
     _sourceUrl = row['sourceUrl'] as String? ?? '';
+    _source = row['source'] as String? ?? '';
+    _status = row['status'] as String? ?? '';
+    _publishedAt = (row['publishedAt'] as num?)?.toInt();
+    _cachedAt = (row['cachedAt'] as num?)?.toInt();
     _wordCount = row['wordCount'] as int? ?? 0;
     if (_title.isEmpty) _title = row['title'] as String? ?? '';
     List<ArticleBlock> bs = [];
@@ -330,7 +320,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     return out;
   }
 
-  void _openWord(String text) {
+  void _openWord(String text, {String sentence = '', int paraIndex = -1, int tokIndex = -1}) {
     final clean = ArticleScreen.cleanQueryText(text);
     if (clean.isEmpty) return;
     showModalBottomSheet<void>(
@@ -339,7 +329,12 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       backgroundColor: Colors.transparent,
       builder: (c) => _WordCardDialog(
         word: clean,
-        translateDisabled: widget.quiz,
+        sentence: sentence.isNotEmpty ? sentence : clean,
+        articleGuid: _guid,
+        articleTitle: _title,
+        sourceLabel: _sourceHost,
+        paraIndex: paraIndex,
+        tokIndex: tokIndex,
         onClose: () => Navigator.pop(c),
         onSpeak: (w) async {
           try {
@@ -374,16 +369,19 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       }
       return;
     }
-    if (!widget.quiz) {
-      final sentence = isTitle ? _title.trim() : _sentenceAround(ctx, ti);
-      ref.read(vocabProvider).recordOccurrence(tk.text, sentence, _guid, _title, _sourceHost, pi, ti);
-      ref.read(vocabRevisionProvider.notifier).bump();
-      _awardCollect(); // 点词沉淀 → 收藏见闻（单篇封顶）
-    }
-    _openWord(tk.text);
+    final sentence = isTitle ? _title.trim() : _sentenceAround(ctx, ti);
+    ref
+        .read(vocabProvider)
+        .recordOccurrence(tk.text, sentence, _guid, _title, _sourceHost, pi, ti)
+        .catchError((_) {});
+    ref.read(vocabRevisionProvider.notifier).bump();
+    _openWord(tk.text, sentence: sentence, paraIndex: pi, tokIndex: ti);
   }
 
+  /// 页头来源：优先云端 `source`，其次 sourceUrl 的 host（去掉 www），兜底「收录文章」。
   String get _sourceHost {
+    final s = _source.trim();
+    if (s.isNotEmpty) return s;
     if (_sourceUrl.isEmpty) return '收录文章';
     try {
       final host = Uri.parse(_sourceUrl).host.replaceFirst(RegExp(r'^www\.'), '');
@@ -393,16 +391,20 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     }
   }
 
+  /// 日期：publishedAt 优先，其次 cachedAt（均为毫秒时间戳，本地时区 MM-dd）；都没有则「—」。
   String get _dateText {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final dt = DateTime.fromMillisecondsSinceEpoch(ts);
-    return '${dt.year}.${dt.month}.${dt.day}';
+    final ts = _publishedAt ?? _cachedAt;
+    if (ts == null || ts <= 0) return '—';
+    final dt = DateTime.fromMillisecondsSinceEpoch(ts).toLocal();
+    final mm = dt.month.toString().padLeft(2, '0');
+    final dd = dt.day.toString().padLeft(2, '0');
+    return '$mm-$dd';
   }
 
   int get _readMins => _wordCount > 0 ? (_wordCount / 60).round().clamp(1, 9999) : 0;
 
   // ================= 朗读 =================
-  Future<void> _readText(String text, {String? cacheKey}) async {
+  Future<void> _readText(String text) async {
     if (text.trim().isEmpty) return;
     await ref.read(ttsProvider).stop();
     setState(() => _ttsSynthesizing = true);
@@ -438,13 +440,13 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     }
     final full = _paragraphs.join('\n\n').trim();
     if (full.isEmpty) return;
-    await _readText(full, cacheKey: 'article:$_articleId');
+    await _readText(full);
   }
 
   Future<void> _readSelection() async {
     final text = _selectedText.isNotEmpty ? _selectedText : _selText;
     if (text.isEmpty) return;
-    await _readText(text, cacheKey: 'sent:$text');
+    await _readText(text);
     _clearSelection();
   }
 
@@ -552,20 +554,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     return 'AI 精选完成：段落 $bp → $ap${delta(bp, ap)}，字数 $bc → $ac${delta(bc, ac)}';
   }
 
-  Future<void> _addToPlan() async {
-    var aid = _articleId;
-    if (aid == 0) {
-      final rows = await ref.read(dbProvider).select('SELECT id FROM articles WHERE guid = ? LIMIT 1', [_guid]);
-      if (rows.isEmpty) return;
-      aid = rows.first['id'] as int;
-    }
-    await ref.read(dbProvider).execute("INSERT OR IGNORE INTO plan_items (articleId, addedAt, status) VALUES (?,?, 'pending')", [aid, DateTime.now().millisecondsSinceEpoch]);
-    ref.read(planRevisionProvider.notifier).bump();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入计划')));
-    }
-  }
-
   // ================= 图片 =================
   String _imgSrc(ArticleBlock b, int bi) {
     final src = b.src ?? '';
@@ -601,7 +589,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                   margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
                   padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
                   decoration: BoxDecoration(color: Go.onSurface.withValues(alpha: 0.88), borderRadius: BorderRadius.circular(Go.rMd)),
-                  child: const Text('点选多个单词组成选区，点「查询」翻译 · 再次点词取消选中',
+                  child: const Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
                       textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: Go.bg, height: Go.lhSnug)),
                 ),
               if (_showSettings) _settings(cfg),
@@ -631,7 +619,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             _selVer.value++;
           }
         }), color: _selectMode ? Go.primary : null),
-        GoIconBtn(icon: 'bookmark', onTap: _addToPlan),
         GoIconBtn(icon: _ttsPlaying ? 'stop' : 'tts', onTap: _toggleReadAloud, color: _ttsPlaying ? Go.primary : null),
         GoIconBtn(icon: 'sparkle', onTap: _onCurateTap, color: _useCurated ? Go.primary : null),
         GoIconBtn(icon: 'settings', onTap: () => setState(() => _showSettings = !_showSettings), color: _showSettings ? Go.primary : null),
@@ -655,13 +642,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
             _step('＋', () => _changeLine(0.1)),
           ])),
-          _setRow('翻译', Wrap(spacing: Go.sp2, children: [
-            for (final e in TranslateService.engineNames.entries)
-              _engChip(e.value, cfg.transEngine == e.key, () => cfg.setReader(transEngine: e.key)),
-          ])),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
-            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
+            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词查询或翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
           ),
         ],
       ),
@@ -693,19 +676,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         ),
       );
 
-  Widget _engChip(String label, bool on, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
-          decoration: BoxDecoration(
-            color: on ? Go.primary95 : Colors.transparent,
-            borderRadius: BorderRadius.circular(Go.rFull),
-            border: Border.all(color: on ? Go.primary : Go.outline, width: 0.5),
-          ),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: on ? Go.primary : Go.onSurface3)),
-        ),
-      );
-
   Future<void> _changeFont(int d) async {
     final cur = ref.read(appConfigProvider).fontSize;
     final v = (cur + d).clamp(14, 28).toDouble();
@@ -731,7 +701,63 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         ]),
       );
     }
+    // 正文未缓存（云端只缓存了元信息）：给占位块 + 打开原文。
+    if (_plain.trim().isEmpty) return _noBody();
     return _reader();
+  }
+
+  /// 正文缺失时的占位：标题等元信息照常展示，正文区给说明与「打开原文」。
+  Widget _noBody() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _cover(),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: Go.sp6),
+            padding: const EdgeInsets.all(Go.sp6),
+            decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('正文未缓存', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                const SizedBox(height: Go.sp2),
+                const Text('这篇文章暂时没有缓存正文，可以打开原文阅读，或稍后重新进入本页加载。',
+                    style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: Go.lhRelaxed)),
+                if (_sourceUrl.isNotEmpty) ...[
+                  const SizedBox(height: Go.sp5),
+                  GestureDetector(
+                    onTap: _openOriginal,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp3),
+                      decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+                      child: const Text('打开原文', style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.onPrimary)),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openOriginal() async {
+    final uri = Uri.tryParse(_sourceUrl.trim());
+    if (uri == null || !uri.hasScheme) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('原文链接无效')));
+      return;
+    }
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法打开原文，请稍后重试')));
+      }
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('打开原文失败，请稍后重试')));
+    }
   }
 
   Widget _reader() {
@@ -748,37 +774,25 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         widgets.add(_imageBlock(b, bi));
       }
     }
-    return NotificationListener<ScrollMetricsNotification>(
-      onNotification: (n) {
-        _maybeAwardRead(n.metrics);
-        return false;
-      },
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          _maybeAwardRead(n.metrics);
-          return false;
-        },
-        child: SingleChildScrollView(
-          controller: _scrollCtrl,
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _cover(),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
-                child: DefaultTextStyle(
-                  style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: Go.sp12),
-                child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
-              ),
-            ],
+    return SingleChildScrollView(
+      controller: _scrollCtrl,
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _cover(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
+            child: DefaultTextStyle(
+              style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
+            ),
           ),
-        ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: Go.sp12),
+            child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
+          ),
+        ],
       ),
     );
   }
@@ -845,16 +859,22 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             ],
           ),
           const SizedBox(height: Go.sp3),
-          Row(
+          Wrap(
+            spacing: Go.sp2,
+            runSpacing: Go.sp2,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(_dateText, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-              if (_readMins > 0) ...[
-                const Text(' · ', style: TextStyle(color: Go.onSurfaceDisabled)),
-                Text('$_readMins 分钟阅读', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-              ],
+              if (_readMins > 0)
+                Text('· $_readMins 分钟阅读', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+              if (_status == 'gone')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(color: Go.danger.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: const Text('源已下线，显示本地缓存', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.danger)),
+                ),
               if (_useCurated)
                 Container(
-                  margin: const EdgeInsets.only(left: Go.sp2),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
                   child: const Text('AI 精选版', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.primary)),
@@ -877,7 +897,6 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           Image.network(
             _imgSrc(b, bi),
             fit: BoxFit.fitWidth,
-            headers: ref.read(appConfigProvider).fetchHeadersFor(_imgSrc(b, bi)),
             errorBuilder: (_, _, _) {
               WidgetsBinding.instance.addPostFrameCallback((_) => _onImgError(bi));
               return const SizedBox(height: 60);
@@ -896,16 +915,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   Future<void> _saveSentence() async {
     final text = _selectedText.isNotEmpty ? _selectedText : _selText;
     if (text.trim().isEmpty) return;
-    int pi = _selPi, ti = _selTi;
-    if (_selectedText.isNotEmpty && _sel.isNotEmpty) {
-      final k = _sel.reduce((a, b) => a < b ? a : b);
-      pi = k >> 20;
-      ti = k & 0xFFFFF;
-    }
+    final a = _selAnchor();
     try {
-      await ref.read(vocabProvider).saveSentence(text, _guid, _title, _sourceHost, pi, ti);
+      await ref.read(vocabProvider).saveSentence(text, _guid, _title, _sourceHost, a.pi, a.ti);
       ref.read(vocabRevisionProvider.notifier).bump();
-      _awardCollect(); // 收藏句子 → 收藏见闻（单篇封顶）
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已收藏句子')));
       _clearSelection();
@@ -913,6 +926,61 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('收藏失败: $e')));
     }
+  }
+
+  /// 选区锚点 (pi, ti)：点选模式取最小 key 反解；长按整句用 _selPi/_selTi。
+  ({int pi, int ti}) _selAnchor() {
+    int pi = _selPi, ti = _selTi;
+    if (_selectedText.isNotEmpty && _sel.isNotEmpty) {
+      final k = _sel.reduce((a, b) => a < b ? a : b);
+      pi = k >> 20;
+      ti = k & 0xFFFFF;
+    }
+    return (pi: pi, ti: ti);
+  }
+
+  /// 入库的 sentence 字段：点选模式用锚点反解所在句；
+  /// 长按路径的 `_selText` 本身就是整句/整段/标题，直接沿用，避免残留的锚点串段。
+  String _selSentence(String fallback) {
+    if (_sel.isEmpty) return fallback;
+    final a = _selAnchor();
+    if (a.pi >= 0 && a.pi < _paragraphs.length) {
+      final s = _sentenceAround(_paragraphs[a.pi], a.ti);
+      if (s.isNotEmpty) return s;
+    }
+    return fallback;
+  }
+
+  /// 划词「查询」：先记一次出现（单词与短语同一路径），再开词卡。
+  Future<void> _querySelection() async {
+    final text = _selectedText.isNotEmpty ? _selectedText : _selText;
+    if (text.trim().isEmpty) return;
+    final clean = ArticleScreen.cleanQueryText(text);
+    final a = _selAnchor();
+    final sentence = _selSentence(text);
+    _clearSelection();
+    if (clean.isEmpty) return;
+    try {
+      await ref.read(vocabProvider).recordOccurrence(clean, sentence, _guid, _title, _sourceHost, a.pi, a.ti);
+      ref.read(vocabRevisionProvider.notifier).bump();
+    } catch (_) {
+      // 入库失败不阻断查词（本地写入，极少发生）。
+    }
+    if (!mounted) return;
+    _openWord(text, sentence: sentence, paraIndex: a.pi, tokIndex: a.ti);
+  }
+
+  /// 划词「翻译」：单引擎走翻译网关，结果在底部弹层展示，可一键复制。
+  void _translateSelection() {
+    final text = _selectedText.isNotEmpty ? _selectedText : _selText;
+    if (text.trim().isEmpty) return;
+    _clearSelection();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => _TranslateSheet(text: text, onClose: () => Navigator.pop(c)),
+    );
   }
 
   Widget _selBar() {
@@ -925,20 +993,28 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
         decoration: BoxDecoration(color: const Color(0xFF2D2A35), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.shadow3),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: Text(preview, style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm))),
-            _selBtn('朗读', onTap: _readSelection),
-            const SizedBox(width: Go.sp3),
-            _selBtn('查询', onTap: () {
-              final t = _selectedText.isNotEmpty ? _selectedText : _selText;
-              _openWord(t);
-              _clearSelection();
-            }),
-            const SizedBox(width: Go.sp3),
-            _selBtn('收藏', onTap: _saveSentence),
-            const SizedBox(width: Go.sp3),
-            GestureDetector(onTap: _clearSelection, child: const Text('取消', style: TextStyle(color: Color(0xBFFFFFFF), fontSize: Go.fsBodySm))),
+            Text(preview,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm, height: Go.lhSnug)),
+            const SizedBox(height: Go.sp3),
+            // Wrap 而非 Row：系统字号放大时按钮换行，不会横向溢出（textScaler 回归铁律）。
+            Wrap(
+              spacing: Go.sp3,
+              runSpacing: Go.sp2,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _selBtn('朗读', onTap: _readSelection),
+                _selBtn('查询', onTap: _querySelection),
+                _selBtn('翻译', onTap: _translateSelection),
+                _selBtn('收藏', onTap: _saveSentence),
+                GestureDetector(onTap: _clearSelection, child: const Text('取消', style: TextStyle(color: Color(0xBFFFFFFF), fontSize: Go.fsBodySm))),
+              ],
+            ),
           ],
         ),
       ),
@@ -1136,27 +1212,56 @@ class _ParaTextState extends State<_ParaText> {
   }
 }
 
-/// 词卡（对齐 WordCard.vue 的简化版：朗读 / 中 / 英 + 查询结果）。
+/// 词卡：单词走 `wordProvider.lookup` 的结构化 JSON（kind=dict/text）；
+/// 短语（查询文本含空格）直接走网关 AI 释义，不打 /dict。
+/// 容器仍是 0.66 屏高的底部弹层，内容区滚动以容纳系统放大的文字。
 class _WordCardDialog extends ConsumerStatefulWidget {
   final String word;
-  final bool translateDisabled;
+  final String sentence; // 词卡所在句（入库用）
+  final String articleGuid;
+  final String articleTitle;
+  final String sourceLabel;
+  final int paraIndex;
+  final int tokIndex;
   final VoidCallback onClose;
   final void Function(String) onSpeak;
-  const _WordCardDialog({required this.word, required this.translateDisabled, required this.onClose, required this.onSpeak});
+  const _WordCardDialog({
+    required this.word,
+    required this.sentence,
+    required this.articleGuid,
+    required this.articleTitle,
+    required this.sourceLabel,
+    required this.paraIndex,
+    required this.tokIndex,
+    required this.onClose,
+    required this.onSpeak,
+  });
   @override
   ConsumerState<_WordCardDialog> createState() => _WordCardDialogState();
 }
 
 class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
+  static final _reSpace = RegExp(r'\s');
+
+  /// 短语查询的网关 prompt：第一行中文释义、第二行整条翻译，两行以内。
+  static const _phraseSystem = '你是英语学习助手。解释用户给出的英文短语：'
+      '第一行给这个短语的中文释义，第二行给整条短语的中文翻译。'
+      '最多两行，不要标题、不要序号、不要英文解释、不要 Markdown。';
+
   String _mode = 'en2zh';
+  late String _q; // 当前查询文本（词卡内点选建议词会替换）
   bool _loading = true;
   String _error = '';
-  String _result = '';
+  Map<String, dynamic>? _card; // kind == 'dict' 时的结构化词卡
+  String _text = ''; // kind == 'text' / 短语 / 旧缓存裸文本
+  bool _added = false;
+
+  bool get _isPhrase => _q.trim().contains(_reSpace);
 
   @override
   void initState() {
     super.initState();
-    _mode = widget.translateDisabled ? 'en2en' : 'en2zh';
+    _q = widget.word;
     _lookup();
   }
 
@@ -1164,28 +1269,86 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
     setState(() {
       _loading = true;
       _error = '';
-      _result = '';
+      _card = null;
+      _text = '';
     });
-    if (widget.translateDisabled) {
-      setState(() {
-        _loading = false;
-        _error = '原文页已禁用翻译';
-      });
-      return;
-    }
     try {
-      final r = await ref.read(wordProvider).lookup(widget.word, mode: _mode);
-      if (!mounted) return;
-      if (r.trim().isEmpty) {
-        setState(() => _error = '未获取到释义，请重试');
+      if (_isPhrase) {
+        // 短语：不走 /dict，直接网关问 AI 要「中文释义 + 中文翻译」。
+        final r = await ref.read(llmProvider).chat(_phraseSystem, '英文短语：$_q');
+        if (!mounted) return;
+        if (r.trim().isEmpty) {
+          setState(() => _error = '未获取到释义，请重试');
+        } else {
+          setState(() => _text = r.trim());
+        }
       } else {
-        setState(() => _result = r);
+        final raw = await ref.read(wordProvider).lookup(_q, mode: _mode);
+        if (!mounted) return;
+        if (raw.trim().isEmpty) {
+          // 服务端失败冷却期内返回空串。
+          setState(() => _error = '未获取到释义，请重试');
+        } else {
+          _applyResult(raw);
+        }
       }
     } catch (e) {
-      if (mounted) setState(() => _error = '查询失败：$e');
+      if (mounted) setState(() => _error = '查询失败：${errText(e)}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// 解析 `wordProvider.lookup` 的返回：
+  /// `kind=dict` → 结构化词卡；`kind=text` → 纯文本译文；解析失败（旧缓存裸文本）→ 原样展示。
+  void _applyResult(String raw) {
+    try {
+      final v = jsonDecode(raw);
+      if (v is Map) {
+        final m = Map<String, dynamic>.from(v);
+        final kind = '${m['kind'] ?? ''}';
+        if (kind == 'dict') {
+          setState(() => _card = m);
+          return;
+        }
+        if (kind == 'text') {
+          final t = '${m['text'] ?? ''}'.trim();
+          if (t.isEmpty) {
+            setState(() => _error = '未获取到释义，请重试');
+          } else {
+            setState(() => _text = t);
+          }
+          return;
+        }
+      }
+    } catch (_) {
+      // 旧缓存里存的是裸文本：当纯文本卡片降级展示。
+    }
+    setState(() => _text = raw.trim());
+  }
+
+  /// 底部「加入生词库」：用当前阅读上下文记录出现位置，随后刷新词汇页。
+  Future<void> _addToVocab() async {
+    if (_added) return;
+    try {
+      await ref.read(vocabProvider).recordOccurrence(
+          _q, widget.sentence, widget.articleGuid, widget.articleTitle, widget.sourceLabel, widget.paraIndex, widget.tokIndex);
+      ref.read(vocabRevisionProvider.notifier).bump();
+      if (!mounted) return;
+      setState(() => _added = true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已收录到生词库')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('收录失败：${errText(e)}')));
+    }
+  }
+
+  /// 点建议词重新查询（found:false 场景）。
+  void _retryWith(String word) {
+    final w = word.trim();
+    if (w.isEmpty) return;
+    setState(() => _q = w);
+    _lookup();
   }
 
   @override
@@ -1199,16 +1362,25 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp5, Go.sp6, Go.sp3),
             child: Row(
               children: [
-                Expanded(child: Text(widget.word, style: const TextStyle(fontSize: Go.fsH1, fontWeight: FontWeight.w600, color: Go.onSurface))),
-                _chip('朗读', true, () => widget.onSpeak(widget.word)),
-                if (!widget.translateDisabled) ...[
+                Flexible(
+                  child: Text(_q, style: const TextStyle(fontSize: Go.fsH1, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                ),
+                if (_isPhrase) ...[
+                  const SizedBox(width: Go.sp2),
+                  _badge('短语'),
+                ],
+                const SizedBox(width: Go.sp2),
+                _chip('朗读', true, () => widget.onSpeak(_q)),
+                if (!_isPhrase) ...[
                   const SizedBox(width: Go.sp2),
                   _chip('中', _mode == 'en2zh', () {
+                    if (_mode == 'en2zh') return;
                     setState(() => _mode = 'en2zh');
                     _lookup();
                   }),
                   const SizedBox(width: Go.sp2),
                   _chip('英', _mode == 'en2en', () {
+                    if (_mode == 'en2en') return;
                     setState(() => _mode = 'en2en');
                     _lookup();
                   }),
@@ -1222,18 +1394,246 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(Go.sp6),
-              child: _loading
-                  ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp3), Text('查询中…', style: TextStyle(color: Go.onSurface3))]))
-                  : _error.isNotEmpty
-                      ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(_error, style: const TextStyle(color: Go.danger, fontSize: Go.fsBodySm)),
-                          const SizedBox(height: Go.sp3),
-                          GestureDetector(onTap: _lookup, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
-                        ])
-                      : Text(_result, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: Go.onSurface)),
+              child: _content(),
             ),
           ),
+          if (_error.isEmpty) ...[
+            const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+            _addBar(),
+          ],
         ],
+      ),
+    );
+  }
+
+  // ================= 渲染 =================
+  Widget _content() {
+    if (_loading) {
+      return const Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp3), Text('查询中…', style: TextStyle(color: Go.onSurface3))]));
+    }
+    if (_error.isNotEmpty) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(_error, style: const TextStyle(color: Go.danger, fontSize: Go.fsBodySm)),
+        const SizedBox(height: Go.sp3),
+        GestureDetector(onTap: _lookup, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+      ]);
+    }
+    final card = _card;
+    if (card != null) return _dictBody(card);
+    // 纯文本卡片：kind=text 的整词翻译 / 短语 AI 释义 / 旧缓存裸文本。
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_isPhrase) ...[
+        _sectionTitle('AI 释义'),
+        const SizedBox(height: Go.sp2),
+      ],
+      Text(_text, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: Go.onSurface)),
+    ]);
+  }
+
+  /// kind == 'dict'：音标/发音 + 中英释义 + 词形 + 考试标签 + 词频小字 + 建议词。
+  Widget _dictBody(Map<String, dynamic> m) {
+    final phonetic = '${m['phonetic'] ?? ''}'.trim();
+    final senses = (m['senses'] as List? ?? const []).whereType<Map>().toList();
+    final zh = '${m['zh'] ?? ''}'.trim();
+    final ex = _exchangeText('${m['exchange'] ?? ''}'.trim());
+    final tags = (m['tags'] as List? ?? const []).map((e) => '$e'.trim()).where((e) => e.isNotEmpty).toList();
+    final meta = _dictMeta(m);
+    final found = m['found'] != false;
+    final suggestions = (m['suggestions'] as List? ?? const []).whereType<Map>().toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          if (phonetic.isNotEmpty)
+            Text('/$phonetic/', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: Go.lhNormal)),
+          const SizedBox(width: Go.sp3),
+          GestureDetector(
+            onTap: () => widget.onSpeak(_q),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
+              decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+              child: const Text('发音', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: Go.sp5),
+        if (senses.isNotEmpty) ...[
+          _sectionTitle(_mode == 'en2en' ? '英文释义' : '中文释义'),
+          const SizedBox(height: Go.sp3),
+          for (final s in senses) _sense(s),
+        ] else if (zh.isNotEmpty) ...[
+          _sectionTitle(_mode == 'en2en' ? '英文释义' : '中文释义'),
+          const SizedBox(height: Go.sp3),
+          Text(zh, style: TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: _mode == 'en2en' ? Go.onSurface2 : Go.onSurface)),
+        ],
+        if (senses.isNotEmpty || zh.isNotEmpty) const SizedBox(height: Go.sp5),
+        if (ex.isNotEmpty) ...[
+          _sectionTitle('词形'),
+          const SizedBox(height: Go.sp2),
+          Text(ex, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2, height: Go.lhNormal)),
+          const SizedBox(height: Go.sp5),
+        ],
+        if (tags.isNotEmpty) ...[
+          Wrap(spacing: Go.sp2, runSpacing: Go.sp2, children: [for (final t in tags) _badge(_tagLabel(t))]),
+          const SizedBox(height: Go.sp5),
+        ],
+        if (meta.isNotEmpty) ...[
+          Text(meta, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+          const SizedBox(height: Go.sp5),
+        ],
+        if (!found) ...[
+          _sectionTitle(suggestions.isEmpty ? '词典里没有这个词' : '你是不是要找'),
+          const SizedBox(height: Go.sp2),
+          for (final s in suggestions) _suggestion(s),
+        ],
+      ],
+    );
+  }
+
+  /// 单个义项：词性前缀 + 主释义（en2zh 用中文 definition，en2en 用英文 en），中文态下英文作小字。
+  Widget _sense(Map s) {
+    final pos = '${s['pos'] ?? ''}'.trim();
+    final definition = '${s['definition'] ?? ''}'.trim();
+    final en = '${s['en'] ?? ''}'.trim();
+    final main = _mode == 'en2en' ? (en.isNotEmpty ? en : definition) : definition;
+    final sub = _mode == 'en2en' ? '' : (en.isNotEmpty && en != definition ? en : '');
+    if (main.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Go.sp3),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (pos.isNotEmpty) ...[
+            Text('$pos.', style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.primary, height: Go.lhNormal)),
+            const SizedBox(width: Go.sp2),
+          ],
+          Expanded(child: Text(main, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhNormal, color: Go.onSurface))),
+        ]),
+        if (sub.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: Go.sp1),
+            child: Text(sub, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+          ),
+      ]),
+    );
+  }
+
+  /// found == false 时的建议词，点击重新查询。
+  Widget _suggestion(Map s) {
+    final w = '${s['word'] ?? ''}'.trim();
+    if (w.isEmpty) return const SizedBox.shrink();
+    final ph = '${s['phonetic'] ?? ''}'.trim();
+    final tr = '${s['translation'] ?? ''}'.trim();
+    return GestureDetector(
+      onTap: () => _retryWith(w),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: Go.sp2),
+        padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
+        decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: Text(ph.isEmpty ? w : '$w  $ph', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface, height: Go.lhNormal))),
+          if (tr.isNotEmpty)
+            Expanded(
+              child: Text(tr, textAlign: TextAlign.right, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  /// 柯林斯星级 / 牛津核心 / BNC 与词频排名（小字一行）。
+  String _dictMeta(Map<String, dynamic> m) {
+    final out = <String>[];
+    final collins = (m['collins'] as num?)?.toInt() ?? 0;
+    final oxford = (m['oxford'] as num?)?.toInt() ?? 0;
+    final bnc = (m['bnc'] as num?)?.toInt() ?? 0;
+    final frq = (m['frq'] as num?)?.toInt() ?? 0;
+    if (collins > 0) out.add('柯林斯 $collins 星');
+    if (oxford > 0) out.add('牛津核心');
+    if (bnc > 0) out.add('BNC 常用 #$bnc');
+    if (frq > 0) out.add('词频 #$frq');
+    return out.join(' · ');
+  }
+
+  /// ECDICT exchange（`p:played d:played i:playing`）→ 可读词形串。
+  static const _exLabels = <String, String>{
+    '0': '原形',
+    'b': '原形',
+    'p': '过去式',
+    'd': '过去分词',
+    'i': '现在分词',
+    '3': '第三人称单数',
+    'r': '比较级',
+    't': '最高级',
+    's': '复数',
+    'u': '不可数',
+    'v': '动名词',
+    'f': '缩写',
+    'x': '过去式/过去分词',
+    'y': '虚拟式',
+  };
+
+  String _exchangeText(String raw) {
+    if (raw.isEmpty) return '';
+    final parts = <String>[];
+    for (final tok in raw.split(RegExp(r'[\s,]+'))) {
+      final m = RegExp(r'^([A-Za-z0-9]+):(.+)$').firstMatch(tok);
+      if (m == null) continue;
+      final value = m.group(2)!.trim();
+      if (value.isEmpty || value == '-') continue;
+      final code = m.group(1)!.toLowerCase();
+      parts.add('${_exLabels[code] ?? code} $value');
+    }
+    return parts.join(' · ');
+  }
+
+  static const _tagLabels = <String, String>{
+    'zk': '中考',
+    'gk': '高考',
+    'ky': '考研',
+    'cet4': '四级',
+    'cet6': '六级',
+    'toefl': '托福',
+    'ielts': '雅思',
+    'gre': 'GRE',
+    'bec': 'BEC',
+    'tem4': '专四',
+    'tem8': '专八',
+    'pte': 'PTE',
+    'fce': 'FCE',
+    'cae': 'CAE',
+  };
+
+  String _tagLabel(String t) {
+    final hit = _tagLabels[t.toLowerCase()];
+    if (hit != null) return hit;
+    return t.length <= 4 ? t.toUpperCase() : t;
+  }
+
+  Widget _sectionTitle(String t) =>
+      Text(t, style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.onSurface3, letterSpacing: 0.4));
+
+  Widget _badge(String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: Go.sp2, vertical: 1),
+        decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
+        child: Text(label, style: const TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.primary)),
+      );
+
+  /// 底部主按钮：加入生词库 → 已收录。
+  Widget _addBar() {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, MediaQuery.of(context).padding.bottom + Go.sp5),
+      child: GestureDetector(
+        onTap: _added ? null : _addToVocab,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: Go.sp4),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(color: _added ? Go.surface2 : Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(_added ? '已收录' : '加入生词库',
+              style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: _added ? Go.onSurface3 : Go.onPrimary)),
+        ),
       ),
     );
   }
@@ -1244,6 +1644,101 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
           decoration: BoxDecoration(color: on ? Go.primary : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull)),
           child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: on ? Go.onPrimary : Go.onSurface3)),
+        ),
+      );
+}
+
+/// 划词「翻译」的底部弹层：网关翻译结果 + 复制。
+class _TranslateSheet extends ConsumerStatefulWidget {
+  final String text;
+  final VoidCallback onClose;
+  const _TranslateSheet({required this.text, required this.onClose});
+  @override
+  ConsumerState<_TranslateSheet> createState() => _TranslateSheetState();
+}
+
+class _TranslateSheetState extends ConsumerState<_TranslateSheet> {
+  bool _loading = true;
+  String _error = '';
+  String _out = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+      _out = '';
+    });
+    try {
+      final r = await ref.read(translateProvider).translate(widget.text);
+      if (!mounted) return;
+      if (r.trim().isEmpty) {
+        setState(() => _error = '翻译结果为空，请重试');
+      } else {
+        setState(() => _out = r.trim());
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = errText(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.45,
+      decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp5, Go.sp6, Go.sp3),
+            child: Row(
+              children: [
+                const Expanded(
+                    child: Text('翻译', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface))),
+                if (_out.isNotEmpty)
+                  _sheetBtn('复制', () async {
+                    await Clipboard.setData(ClipboardData(text: _out));
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已复制译文')));
+                  }),
+                const SizedBox(width: Go.sp3),
+                GestureDetector(onTap: widget.onClose, child: const Text('×', style: TextStyle(fontSize: 24, color: Go.onSurface3))),
+              ],
+            ),
+          ),
+          const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(Go.sp6),
+              child: _loading
+                  ? const Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp3), Text('翻译中…', style: TextStyle(color: Go.onSurface3))]))
+                  : _error.isNotEmpty
+                      ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(_error, style: const TextStyle(color: Go.danger, fontSize: Go.fsBodySm)),
+                          const SizedBox(height: Go.sp3),
+                          GestureDetector(onTap: _run, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+                        ])
+                      : Text(_out, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: Go.onSurface)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sheetBtn(String label, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
+          decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface)),
         ),
       );
 }

@@ -4,7 +4,7 @@ import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 弹出更新卡片。自带滑入动画（与 GoTimePickerSheet 同款节奏）。
+/// 弹出更新卡片。自带滑入动画（底部面板通用的滑入节奏）。
 Future<void> showGoUpdateSheet(BuildContext context, UpdateController c) => showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,

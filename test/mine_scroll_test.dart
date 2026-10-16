@@ -6,11 +6,14 @@ import 'package:toneup_read/screens/mine_screen.dart';
 
 import 'fake_db.dart';
 
+/// 页尾固定文案（mine 页最后一段：签名 + 版本号）。
 const _footer = '一潼上岸·阅读 · By 潼潼';
 
 void main() {
-  testWidgets('我的页内容超高时仍可滚动', (tester) async {
-    tester.view.physicalSize = const Size(400, 640);
+  testWidgets('我的页内容超高时仍可滚动（能拖到页尾）', (tester) async {
+    // 云端化后 mine 页只剩 服务配置/数据管理/关于 三段（比旧版矮），
+    // 视口相应调矮，保证「内容超出视口」这个前置条件依旧成立。
+    tester.view.physicalSize = const Size(400, 560);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -20,37 +23,26 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
+    // 锚点 = 页尾签名行（服务配置 / 数据管理 / 关于+检查更新 之后）。
     final footer = find.text(_footer);
     expect(footer, findsOneWidget);
 
-    final before = tester.getTopLeft(footer).dy;
-    expect(before, greaterThan(640), reason: '前置条件：内容应超出视口');
+    // 前置条件：内容（三段 + 页尾）应超出 560 高的视口。
+    final scrollable = find.byType(Scrollable).first;
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.maxScrollExtent, greaterThan(0), reason: '前置条件：内容应超出视口');
 
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -240));
+    final before = tester.getTopLeft(footer).dy;
+
+    // 拖动幅度远超可滚动距离 → 应停在页尾。
+    await tester.drag(scrollable, const Offset(0, -600));
     await tester.pumpAndSettle();
 
     expect(tester.getTopLeft(footer).dy, lessThan(before), reason: '页面应能向上拖动');
-  });
-
-  testWidgets('「发送测试通知」可点击并给出结果反馈', (tester) async {
-    tester.view.physicalSize = const Size(400, 640);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
-    await tester.pumpWidget(ProviderScope(
-      overrides: [dbProvider.overrideWithValue(FakeDb())],
-      child: const MaterialApp(home: MineScreen()),
-    ));
-    await tester.pumpAndSettle();
-
-    final row = find.text('发送测试通知');
-    expect(row, findsOneWidget);
-    await tester.ensureVisible(row);
-    await tester.tap(row);
-    await tester.pumpAndSettle();
-
-    // 测试环境里 NotificationService 直接短路（无通知平台通道），故反馈是失败文案；
-    // 这里锁的是「点击有反馈」这条链路。
-    expect(find.text('发送失败：没拿到通知权限'), findsOneWidget);
+    expect(
+      position.pixels,
+      moreOrLessEquals(position.maxScrollExtent, epsilon: 1),
+      reason: '持续上拖应滚到页尾（被边界截停）',
+    );
   });
 }

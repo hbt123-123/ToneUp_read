@@ -5,7 +5,7 @@ import 'package:sqflite/sqflite.dart';
 
 /// 单条 SQL 的绑定变量上限：旧版 Android 的 SQLite（< 3.32）为 999。
 /// 统一按此大小切片，所有 `IN (...)` 大列表查询都必须分批，避免 "too many SQL variables"
-/// （例如错题本「全部重做 / 重判」时一次传入上千个 questionId）。
+/// （例如标题中译批量回写时一次传入上千个 title）。
 const int sqlBindChunk = 400;
 
 /// 将列表按 [size] 切片，供过大的 `IN (...)` 拆成多条查询复用。
@@ -62,7 +62,8 @@ class DbService {
         await runScript(db, _indexes);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        // 老库升级：索引用 CREATE INDEX IF NOT EXISTS，幂等；按当前版本把缺失索引补齐即可。
+        // 老库升级：先补 v6 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
+        if (oldVersion < 6) await _migrateV6(db);
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
     );
@@ -98,84 +99,80 @@ class DbService {
     return c.future;
   }
 
+  /// v5 → v6：articles 补列（云端元信息）+ 新建 title_zh（标题中译缓存）
+  /// + DROP 云端化后废弃的旧表（feeds / 出题备考 / kv）。
+  ///
+  /// 幂等：先用 `PRAGMA table_info` 看列是否存在再 ALTER，可重复执行；
+  /// 旧库若手工跑过部分迁移也不会因「列已存在」报错；DROP 一律 IF EXISTS。
+  /// 时间列一律存 epoch 毫秒（接口返回的秒 ×1000）。
+  Future<void> _migrateV6(Database db) async {
+    const cols = <String, String>{
+      'remoteId': 'INTEGER',
+      'source': 'TEXT',
+      'summary': 'TEXT',
+      'publishedAt': 'INTEGER',
+      'expiresAt': 'INTEGER',
+      'status': 'TEXT',
+      'aiVerdict': 'TEXT',
+      'remoteFetchedAt': 'INTEGER',
+      'cachedAt': 'INTEGER',
+    };
+    try {
+      final info = await db.rawQuery('PRAGMA table_info(articles)');
+      final have = info.map((r) => '${r['name']}').toSet();
+      for (final e in cols.entries) {
+        if (have.contains(e.key)) continue;
+        try {
+          await db.execute('ALTER TABLE articles ADD COLUMN ${e.key} ${e.value}');
+        } catch (_) {
+          // 列已存在（并发/重复迁移）等容忍；不阻断后续迁移。
+        }
+      }
+    } catch (_) {
+      // PRAGMA 失败时仍尝试逐列补，ALTER 自身的异常会被上面吞掉。
+      for (final e in cols.entries) {
+        try {
+          await db.execute('ALTER TABLE articles ADD COLUMN ${e.key} ${e.value}');
+        } catch (_) {}
+      }
+    }
+    await db.execute('CREATE TABLE IF NOT EXISTS title_zh (title TEXT PRIMARY KEY, zh TEXT NOT NULL, at INTEGER)');
+
+    // 云端化后废弃的旧表：抓取/订阅（feeds、feed_items）、出题备考
+    // （question_sets、questions、answers、presets、templates、plan_items）
+    // 与游戏化键值（kv，见闻/连续/目标等级全落在这里）一次性 DROP。
+    // 全部 IF EXISTS，重复执行安全；旧索引随表自动删除。
+    for (final t in [
+      'feeds',
+      'feed_items',
+      'question_sets',
+      'questions',
+      'answers',
+      'presets',
+      'plan_items',
+      'templates',
+      'kv',
+    ]) {
+      await db.execute('DROP TABLE IF EXISTS $t');
+    }
+  }
+
+  /// 清空「全部数据」= 文章/词典缓存 + 词汇三表。
   Future<void> clearAll() async {
     await _withWriteLock(() async {
-      for (final t in ['feeds', 'feed_items', 'articles', 'question_sets', 'questions', 'answers', 'word_cache', 'presets', 'plan_items', 'vocab_head', 'vocab_occ', 'vocab_sentence']) {
+      for (final t in ['articles', 'title_zh', 'word_cache', 'vocab_head', 'vocab_occ', 'vocab_sentence']) {
         await execute('DELETE FROM $t');
       }
     });
   }
 
+  /// 清空缓存：文章缓存 + 词典缓存（不动词汇三表）。
   Future<void> clearCache() async {
     await _withWriteLock(() async {
-      for (final t in ['feed_items', 'word_cache']) {
+      for (final t in ['articles', 'title_zh', 'word_cache']) {
         await execute('DELETE FROM $t');
       }
     });
-  }
-
-  Future<Map<int, String>> loadDrafts(List<int> ids) async {
-    final out = <int, String>{};
-    if (ids.isEmpty) return out;
-    final best = <int, Map<String, dynamic>>{};
-    // 分批查，规避绑定变量上限（错题本一次可能传入上千个 questionId）。
-    for (final chunk in chunked(ids)) {
-      final ph = List.filled(chunk.length, '?').join(',');
-      final rows = await select(
-          'SELECT id, questionId, draft FROM answers WHERE questionId IN ($ph) AND gradedAt = 0 AND draft IS NOT NULL',
-          chunk);
-      for (final r in rows) {
-        final qid = r['questionId'] as int;
-        if (!best.containsKey(qid) || (r['id'] as int) > (best[qid]!['id'] as int)) best[qid] = r;
-      }
-    }
-    for (final qid in ids) {
-      out[qid] = best[qid] != null ? (best[qid]!['draft'] as String? ?? '') : '';
-    }
-    return out;
-  }
-
-  Future<void> saveDraft(int questionId, String content) async {
-    await _withWriteLock(() async {
-      final rows = await select(
-          'SELECT id FROM answers WHERE questionId = ? AND gradedAt = 0 AND (final IS NULL OR final = "") ORDER BY id DESC LIMIT 1',
-          [questionId]);
-      if (rows.isNotEmpty) {
-        await execute('UPDATE answers SET draft = ? WHERE id = ?', [content, rows.first['id']]);
-      } else {
-        await execute('INSERT INTO answers (questionId, draft, gradedAt) VALUES (?, ?, 0)', [questionId, content]);
-      }
-    });
-  }
-
-  Future<void> clearDrafts(List<int> questionIds) async {
-    if (questionIds.isEmpty) return;
-    await _withWriteLock(() async {
-      for (final chunk in chunked(questionIds)) {
-        final ph = List.filled(chunk.length, '?').join(',');
-        await execute('DELETE FROM answers WHERE questionId IN ($ph) AND gradedAt = 0', chunk);
-      }
-    });
-  }
-
-  Future<Map<int, List<Map<String, dynamic>>>> loadHistory(List<int> questionIds) async {
-    final out = <int, List<Map<String, dynamic>>>{};
-    for (final q in questionIds) {
-      out[q] = [];
-    }
-    if (questionIds.isEmpty) return out;
-    // 分批查：每个 questionId 只落在其中一批，批内按 gradedAt ASC，合并不破坏各题历史顺序。
-    for (final chunk in chunked(questionIds)) {
-      final ph = List.filled(chunk.length, '?').join(',');
-      final rows = await select(
-          'SELECT questionId, final, correct, wrong, comment, status, gradedAt FROM answers WHERE questionId IN ($ph) AND gradedAt > 0 ORDER BY gradedAt ASC',
-          chunk);
-      for (final r in rows) {
-        final qid = r['questionId'] as int;
-        (out[qid] ??= []).add(r);
-      }
-    }
-    return out;
   }
 
   Future<List<dynamic>?> loadCurated(int id) async {
@@ -202,42 +199,14 @@ class DbService {
 }
 
 const String _schema = '''
-CREATE TABLE IF NOT EXISTS feeds (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT, url TEXT UNIQUE, category TEXT, addedAt INTEGER,
-  failCount INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS feed_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  feedId INTEGER, guid TEXT, title TEXT, link TEXT,
-  preview TEXT, pubDate INTEGER, fetchedAt INTEGER,
-  UNIQUE(feedId, guid)
-);
 CREATE TABLE IF NOT EXISTS articles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   guid TEXT UNIQUE, title TEXT, author TEXT, sourceUrl TEXT,
   html TEXT, plainText TEXT, blocks TEXT, wordCount INTEGER, capturedAt INTEGER,
-  curated_blocks TEXT
-);
-CREATE TABLE IF NOT EXISTS question_sets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  articleId INTEGER, presetId INTEGER, title TEXT, createdAt INTEGER
-);
-CREATE TABLE IF NOT EXISTS questions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  setId INTEGER, type TEXT, gradeMode TEXT, prompt TEXT,
-  options TEXT, answers TEXT, analysis TEXT, sourceQuote TEXT, createdAt INTEGER
-);
-CREATE TABLE IF NOT EXISTS answers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  questionId INTEGER NOT NULL,
-  draft TEXT,
-  final TEXT,
-  correct INTEGER,
-  wrong INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'graded',
-  comment TEXT,
-  gradedAt INTEGER
+  curated_blocks TEXT,
+  remoteId INTEGER, source TEXT, summary TEXT,
+  publishedAt INTEGER, expiresAt INTEGER, status TEXT,
+  aiVerdict TEXT, remoteFetchedAt INTEGER, cachedAt INTEGER
 );
 CREATE TABLE IF NOT EXISTS word_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,53 +238,30 @@ CREATE TABLE IF NOT EXISTS vocab_sentence (
   paraIndex INTEGER, tokIndex INTEGER, at INTEGER,
   analysis TEXT
 );
-CREATE TABLE IF NOT EXISTS presets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT, config TEXT
-);
-CREATE TABLE IF NOT EXISTS plan_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  articleId INTEGER UNIQUE, addedAt INTEGER, status TEXT DEFAULT 'pending'
-);
-CREATE TABLE IF NOT EXISTS kv (
-  key TEXT PRIMARY KEY,
-  value TEXT
-);
-CREATE TABLE IF NOT EXISTS templates (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT UNIQUE, source TEXT
-);
+CREATE TABLE IF NOT EXISTS title_zh (title TEXT PRIMARY KEY, zh TEXT NOT NULL, at INTEGER)
 ''';
 
 /// 追加的索引：只覆盖确实走全表扫描的热路径（执行计划实测：去掉了全表扫描 + 临时 B 树排序）。
-/// - feed_items(feedId, pubDate)：单源阅读视图 `WHERE feedId = ? ORDER BY pubDate DESC`，
-///   原来走 UNIQUE(feedId,guid) 后再内存排序；合到 (feedId,pubDate) 后直接有序返回。
-/// - feed_items.pubDate：聚合阅读列表 `ORDER BY pubDate DESC LIMIT/OFFSET`（JOIN feeds），每次进页都查。
-/// - answers(questionId, gradedAt)：草稿/答题历史按这两列过滤排序。
-/// - answers(gradedAt)：错题本 / 导出页 `ORDER BY gradedAt DESC` 扫整张只增不减的 answers。
 /// - vocab_occ(lemma, at)：词汇页 `GROUP BY lemma`（取最左前缀）与 `WHERE lemma = ? ORDER BY at DESC`
 ///   （getOccurrence 看某词在哪些文章出现，按时间倒序）。用复合索引同时覆盖这两类查询，
 ///   不再需要单列 `idx_vocab_occ_lemma`，少维护一个热表（点词每次 INSERT）索引。
-/// - questions.setId：`WHERE setId = ?`。
 /// - vocab_head(lastSeen)：词汇列表 `ORDER BY lastSeen DESC`。
 /// - vocab_head(fsrs_due)：复习页 `WHERE fsrs_due <= ? ORDER BY fsrs_due ASC`（高频打开）。
 /// - word_cache.lemma：`WHERE word = ? OR lemma = ?` 的 OR 优化需要两侧各有索引
 ///   （点查 `word+mode` 已由 schema 的 UNIQUE(word,mode) 覆盖，无需额外索引）。
 @visibleForTesting
 const List<String> dbIndexStatements = [
-  'CREATE INDEX IF NOT EXISTS idx_feed_items_feed_pubdate ON feed_items(feedId, pubDate)',
-  'CREATE INDEX IF NOT EXISTS idx_feed_items_pubdate ON feed_items(pubDate)',
-  'CREATE INDEX IF NOT EXISTS idx_answers_question ON answers(questionId, gradedAt)',
-  'CREATE INDEX IF NOT EXISTS idx_answers_gradedat ON answers(gradedAt)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_occ_lemma_at ON vocab_occ(lemma, at)',
-  'CREATE INDEX IF NOT EXISTS idx_questions_set ON questions(setId)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_head_lastseen ON vocab_head(lastSeen)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_head_fsrsdue ON vocab_head(fsrs_due)',
   'CREATE INDEX IF NOT EXISTS idx_word_cache_lemma ON word_cache(lemma)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_sentence_at ON vocab_sentence(at)',
+  // 云端文章缓存：离线兜底列表按 cachedAt 倒序、按 remoteId 点查/回写。
+  'CREATE INDEX IF NOT EXISTS idx_articles_cachedat ON articles(cachedAt)',
+  'CREATE INDEX IF NOT EXISTS idx_articles_remoteid ON articles(remoteId)',
 ];
 
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 5;
+const int _dbVersion = 6;

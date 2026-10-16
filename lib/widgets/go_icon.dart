@@ -21,6 +21,8 @@ IconData goIcon(String name) {
     case 'words':
     case 'vocab':
       return Icons.menu_book_outlined; // 词汇本
+    case 'sentence':
+      return Icons.format_quote; // 句子收藏
     case 'mine':
       return Icons.person_outline;
 

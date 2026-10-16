@@ -11,14 +11,12 @@ import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/db_service.dart';
 import 'package:toneup_read/services/http_service.dart';
 import 'package:toneup_read/services/llm_service.dart';
-import 'package:toneup_read/services/quiz_service.dart';
 import 'package:toneup_read/services/vocab_service.dart';
 import 'package:toneup_read/theme/app_theme.dart';
 import 'package:toneup_read/widgets/bottom_nav.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
 // 播种规模（模拟重度使用者）
-const int _seedQ = 600; // 题目数
 const int _seedHeads = 300; // 词条数
 const int _occPer = 6; // 每个词条的出现次数
 
@@ -39,24 +37,6 @@ Future<List<FrameTiming>> _measureFrames(WidgetTester tester, Widget app, {int f
   }
   WidgetsBinding.instance.removeTimingsCallback(cb);
   return t;
-}
-
-/// 旧实现：错题本 / 错题导出的“全表 + 内存过滤”。
-Future<int> _oldWrongList(DbService db) async {
-  final questions = await db.select('SELECT * FROM questions ORDER BY id ASC');
-  final answers = await db.select('SELECT * FROM answers ORDER BY gradedAt DESC');
-  final latest = <int, Map<String, dynamic>>{};
-  for (final a in answers) {
-    latest.putIfAbsent(a['questionId'] as int, () => a);
-  }
-  final out = <Map<String, dynamic>>[];
-  for (final q in questions) {
-    final a = latest[q['id'] as int];
-    if (a == null) continue;
-    if ((a['wrong'] as int? ?? 0) != 1 && a['status'] != 'pending') continue;
-    out.add(q);
-  }
-  return out.length;
 }
 
 /// 旧实现：recordOccurrence 的 4 次往返（先 SELECT 存在性）。
@@ -100,40 +80,15 @@ void main() {
         );
       }
     }
-    // 题目 + 作答（约 35% 最终判错 → 错题本规模）
-    for (var i = 0; i < _seedQ; i++) {
-      await db.execute(
-        'INSERT OR REPLACE INTO questions (id, setId, type, gradeMode, prompt, options, answers, analysis, sourceQuote, createdAt) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [i + 1, 1, 'choice', 'exact', 'Question ${i + 1}', '["A","B"]', '["A"]', 'analysis', 'quote', i],
-      );
-      final wrong = (i % 100) < 35 ? 1 : 0; // 约 35% 错
-      await db.execute(
-        'INSERT OR REPLACE INTO answers (questionId, draft, final, correct, wrong, status, comment, gradedAt) VALUES (?,?,?,?,?,?,?,?)',
-        [i + 1, null, 'my answer ${i + 1}', wrong == 1 ? 0 : 1, wrong, 'graded', 'c', 1000 + i],
-      );
-    }
   });
 
   tearDownAll(() async {
     await db.execute("DELETE FROM vocab_head WHERE head LIKE 'zzperf_%' OR head LIKE 'zzold_%' OR head LIKE 'zznew_%'");
     await db.execute("DELETE FROM vocab_occ WHERE lemma LIKE 'zzperf_%' OR lemma LIKE 'zzold_%' OR lemma LIKE 'zznew_%'");
-    await db.execute('DELETE FROM answers WHERE gradedAt >= 1000 AND gradedAt < 100000');
-    await db.execute('DELETE FROM questions WHERE setId = 1 AND prompt LIKE \'Question %\'');
   });
 
   testWidgets('优化前 vs 优化后（同一设备同一数据）', (tester) async {
     final vocab = VocabService(db, LlmService(HttpService(), AppConfigService()));
-    final quiz = QuizService(LlmService(HttpService(), AppConfigService()), db);
-
-    // === A) 错题列表查询 ===
-    final swA1 = Stopwatch()..start();
-    final oldRows = await _oldWrongList(db);
-    swA1.stop();
-    final swA2 = Stopwatch()..start();
-    final newRows = (await quiz.loadWrongList()).length;
-    swA2.stop();
-    debugPrint('CMP wrong-list  BEFORE=${swA1.elapsedMicroseconds / 1000}ms(rows $oldRows, 全表 SELECT* questions+answers)'
-        '  AFTER=${swA2.elapsedMicroseconds / 1000}ms(rows $newRows, 受限 JOIN)');
 
     // === B) 词汇页 vocab_occ 读取（全表拉取 vs GROUP BY 聚合）===
     final swB1 = Stopwatch()..start();

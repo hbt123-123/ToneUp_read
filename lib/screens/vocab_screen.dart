@@ -1,7 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/screens/article_screen.dart';
@@ -20,8 +21,6 @@ class VocabScreen extends ConsumerStatefulWidget {
 class _VocabScreenState extends ConsumerState<VocabScreen> {
   List<Map<String, dynamic>> _heads = [];
   String _mode = 'all';
-  String _view = 'vocab';
-  List<Map<String, dynamic>> _sentences = [];
   int _dueCount = 0;
   Map<String, dynamic>? _occ;
   Map<String, dynamic>? _org;
@@ -57,14 +56,6 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
       await svc.syncHeadsFromCache();
       _heads = await svc.getHeads();
       _dueCount = await svc.dueCount();
-      final rawSent = await svc.getSentences();
-      _sentences = rawSent.map((s) {
-        dynamic a;
-        try {
-          if (s['analysis'] != null) a = jsonDecode(s['analysis'] as String);
-        } catch (_) {}
-        return {...s, '_analysis': a, '_analyzing': false};
-      }).toList();
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('词汇加载失败: $e')));
@@ -82,16 +73,16 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     } catch (e) {
       if (!mounted) return;
       final msg = errText(e);
-      if (msg.contains('未配置') || msg.contains('profile')) {
+      if (msg.contains('未配置')) {
         final ok = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: const Text('未配置 LLM'),
-            content: const Text('AI 整理需要模型配置，是否前往「我的」添加？'),
+            title: const Text('未配置翻译模型'),
+            content: const Text('需要先在『我的 → 服务配置』填写翻译网关密钥，是否前往？'),
             actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('前往'))],
           ),
         );
-        if (ok == true) ref.read(tabIndexProvider.notifier).set(4);
+        if (ok == true) ref.read(tabIndexProvider.notifier).set(3);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg.length > 60 ? msg.substring(0, 60) : msg)));
       }
@@ -116,34 +107,6 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         builder: (_) => ArticleScreen(guid: guid, focusPara: (o['paraIndex'] as int?) ?? -1, focusTok: (o['tokIndex'] as int?) ?? -1),
       ),
     );
-  }
-
-  Future<void> _onAnalyze(Map<String, dynamic> s) async {
-    if (s['sentence'] == null) return;
-    setState(() => s['_analyzing'] = true);
-    try {
-      final data = await ref.read(vocabProvider).analyzeSentence(s['sentence'] as String);
-      if (!mounted) return;
-      setState(() => s['_analysis'] = data);
-    } catch (e) {
-      if (!mounted) return;
-      final msg = errText(e);
-      if (msg.contains('未配置')) {
-        final ok = await showDialog<bool>(
-          context: context,
-          builder: (c) => AlertDialog(
-            title: const Text('未配置 LLM'),
-            content: const Text('语法拆解需要模型配置，是否前往「我的」添加？'),
-            actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('前往'))],
-          ),
-        );
-        if (ok == true) ref.read(tabIndexProvider.notifier).set(4);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg.length > 60 ? msg.substring(0, 60) : msg)));
-      }
-    } finally {
-      if (mounted) setState(() => s['_analyzing'] = false);
-    }
   }
 
   Future<void> _remove(Map<String, dynamic> h) async {
@@ -183,7 +146,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final onThisTab = ref.watch(tabIndexProvider) == 3;
+    final onThisTab = ref.watch(tabIndexProvider) == 1;
     // 只有本页可见时才响应词汇变更：阅读中每点一个词都会 bump，
     // 隐藏的 Tab 若跟着全量重载（含两次 vocab_occ 聚合）会拖慢阅读。
     if (onThisTab) {
@@ -200,7 +163,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         });
       }
     }
-    final empty = _view == 'vocab' ? _filtered.isEmpty : _sentences.isEmpty;
+    final empty = _filtered.isEmpty;
     return GoPage(
       topPad: false,
       globe: true,
@@ -210,10 +173,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           Column(
             children: [
               _appbar(),
-              _seg(),
-              Expanded(
-                child: _view == 'vocab' ? _vocabScroll() : SingleChildScrollView(child: _sentenceView()),
-              ),
+              Expanded(child: _vocabScroll()),
             ],
           ),
           if (_occ != null) _occSheet(),
@@ -246,32 +206,96 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
               padding: const EdgeInsets.only(left: Go.sp3),
               child: GestureDetector(onTap: _clearAll, child: const Text('清空', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
             ),
+          Padding(
+            padding: const EdgeInsets.only(left: Go.sp2),
+            child: GoIconBtn(icon: 'export', onTap: _openExportSheet),
+          ),
         ],
       );
 
-  Widget _seg() => Padding(
-        padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp3, Go.sp6, Go.sp2),
-        child: Row(
+  // ===================== 生词导出（M4 决策 11） =====================
+
+  /// 导出文本：只含英文 head，**半角逗号 + 半角空格**拼接（接收方按此解析，禁用全角逗号）。
+  String get _exportText => _heads.map((h) => '${h['head']}').join(', ');
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _copyExport() async {
+    final txt = _exportText;
+    if (txt.isEmpty) {
+      _snack('暂无生词可导出');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: txt));
+    _snack('已复制 ${_heads.length} 个词');
+  }
+
+  Future<void> _shareExport() async {
+    final txt = _exportText;
+    if (txt.isEmpty) {
+      _snack('暂无生词可导出');
+      return;
+    }
+    await SharePlus.instance.share(ShareParams(text: txt, subject: '生词表'));
+  }
+
+  void _openExportSheet() {
+    if (_heads.isEmpty) {
+      _snack('暂无生词可导出');
+      return;
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+        padding: EdgeInsets.only(left: Go.sp5, right: Go.sp5, top: Go.sp4, bottom: MediaQuery.of(c).padding.bottom + Go.sp6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            _segItem('词汇', _view == 'vocab', () => setState(() => _view = 'vocab')),
-            const SizedBox(width: Go.sp2),
-            _segItem('句子', _view == 'sentence', () => setState(() => _view = 'sentence')),
+            Container(width: Go.r(64), height: 3, decoration: BoxDecoration(color: Go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull))),
+            const SizedBox(height: Go.sp4),
+            const Text('导出生词', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface)),
+            const SizedBox(height: Go.sp2),
+            Text('${_heads.length} 个词，英文词条以半角逗号分隔', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            const SizedBox(height: Go.sp5),
+            _exportBtn(label: '复制文本', icon: 'copy', filled: true, onTap: () {
+              Navigator.pop(c);
+              _copyExport();
+            }),
+            const SizedBox(height: Go.sp3),
+            _exportBtn(label: '分享到单词应用', icon: 'export', filled: false, onTap: () {
+              Navigator.pop(c);
+              _shareExport();
+            }),
           ],
         ),
-      );
+      ),
+    );
+  }
 
-  Widget _segItem(String label, bool on, VoidCallback onTap) => Expanded(
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: Go.sp2),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: on ? Go.primary95 : Colors.transparent,
-              borderRadius: BorderRadius.circular(Go.rMd),
-              border: Border.all(color: on ? Go.primary : Go.outline, width: 0.5),
-            ),
-            child: Text(label, style: TextStyle(fontSize: Go.fsBody, color: on ? Go.primary : Go.onSurface3)),
+  Widget _exportBtn({required String label, required String icon, required bool filled, required VoidCallback onTap}) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp4),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: filled ? Go.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(Go.rFull),
+            border: filled ? null : Border.all(color: Go.primary, width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              GoIcon(icon, size: Go.r(40), color: filled ? Colors.white : Go.primary),
+              const SizedBox(width: Go.sp2),
+              Text(label, style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: filled ? Colors.white : Go.primary)),
+            ],
           ),
         ),
       );
@@ -387,115 +411,6 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         padding: const EdgeInsets.symmetric(horizontal: Go.sp2, vertical: 1),
         decoration: BoxDecoration(color: src ? Go.primary95 : Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
         child: Text(text, style: TextStyle(fontSize: Go.fsMeta, color: src ? Go.primary : Go.onSurface3)),
-      );
-
-  Widget _sentenceView() {
-    if (_sentences.isEmpty) {
-      return const GoEmpty(icon: 'reading', title: '还没有收藏的句子', desc: '在正文里点词，原句会自动沉淀到这里');
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp2), child: Text('${_sentences.length} 个收藏句子', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp8),
-          child: Column(children: [for (final s in _sentences) _sentenceCard(s)]),
-        ),
-      ],
-    );
-  }
-
-  Widget _sentenceCard(Map<String, dynamic> s) {
-    final analysis = s['_analysis'];
-    return Container(
-      margin: const EdgeInsets.only(bottom: Go.sp4),
-      padding: const EdgeInsets.all(Go.sp5),
-      decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: Go.outline, width: 0.5)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('“${s['sentence']}”', style: const TextStyle(fontSize: Go.fsBody, height: 1.6, color: Go.onSurface)),
-          Padding(
-            padding: const EdgeInsets.only(top: Go.sp2),
-            child: Text('${s['sourceLabel'] ?? '来源'} · ${s['articleTitle'] ?? ''}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: Go.sp4),
-            child: Row(
-              children: [
-                _miniBtn('回到原文', () {
-                  final guid = s['articleGuid'] as String?;
-                  if (guid == null || guid.isEmpty) return;
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => ArticleScreen(guid: guid, focusPara: (s['paraIndex'] as int?) ?? -1, focusTok: (s['tokIndex'] as int?) ?? -1)));
-                }),
-                const SizedBox(width: Go.sp3),
-                _miniBtn(s['_analyzing'] == true ? '拆解中…' : (analysis != null ? '重新拆解' : 'LLM 拆解'), () => _onAnalyze(s), ai: true),
-              ],
-            ),
-          ),
-          if (analysis is Map) _analysisView(analysis),
-        ],
-      ),
-    );
-  }
-
-  Widget _miniBtn(String label, VoidCallback onTap, {bool ai = false}) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp1),
-          decoration: BoxDecoration(border: Border.all(color: ai ? Go.primary : Go.outline), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? Go.primary : Go.onSurface2)),
-        ),
-      );
-
-  Widget _analysisView(Map analysis) {
-    return Container(
-      margin: const EdgeInsets.only(top: Go.sp4),
-      padding: const EdgeInsets.only(top: Go.sp3),
-      decoration: const BoxDecoration(border: Border(top: BorderSide(color: Go.outline, width: 0.5, style: BorderStyle.solid))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if ('${analysis['translation'] ?? ''}'.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(bottom: Go.sp3), child: Text('${analysis['translation']}', style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface))),
-          if (analysis['chunks'] is List && (analysis['chunks'] as List).isNotEmpty)
-            _analysisSection('语块', [
-              for (final c in analysis['chunks'] as List) _analysisRow('${c['text']}', '${c['type']} · ${c['note']}'),
-            ]),
-          if (analysis['grammar'] is List && (analysis['grammar'] as List).isNotEmpty)
-            _analysisSection('语法', [
-              for (final g in analysis['grammar'] as List) _analysisRow('${g['point']}', '${g['explain']}'),
-            ]),
-          if (analysis['keywords'] is List && (analysis['keywords'] as List).isNotEmpty)
-            _analysisSection('重点词', [
-              for (final k in analysis['keywords'] as List) _analysisRow('${k['word']} ${k['pos'] ?? ''}', '${k['zh']}'),
-            ]),
-        ],
-      ),
-    );
-  }
-
-  Widget _analysisSection(String title, List<Widget> rows) => Padding(
-        padding: const EdgeInsets.only(bottom: Go.sp3),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontSize: Go.fsMeta, color: Go.primary, fontWeight: FontWeight.w600)),
-            ...rows,
-          ],
-        ),
-      );
-
-  Widget _analysisRow(String k, String v) => Container(
-        padding: const EdgeInsets.symmetric(vertical: Go.sp2),
-        decoration: const BoxDecoration(border: Border(top: BorderSide(color: Go.outline, width: 0.5))),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(k, style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
-            Text(v, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-          ],
-        ),
       );
 
   Widget _sheetShell({required String title, String? zh, required Widget body, required Widget actions, bool tall = false}) {

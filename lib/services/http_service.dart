@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/app_exception.dart';
 
 class RetryPolicy {
@@ -25,24 +24,20 @@ class RetryPolicy {
 }
 
 class HttpService {
-  HttpService({http.Client? client, AppConfigService? config})
-      : _client = client ?? http.Client(),
-        _cfg = config;
+  HttpService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
-  final AppConfigService? _cfg;
 
   static const timeout = Duration(seconds: 20);
 
-  /// 抓取类请求（RSS 列表 / 文章正文）：带浏览器式默认 UA 与用户自定义请求头。
+  /// 纯文本 GET（OpenGraph 抓取等）：只带调用方传入的头。
   Future<String> getText(
     String url, {
     Map<String, String>? headers,
-    bool fetchScope = true,
     RetryPolicy retry = RetryPolicy.none,
   }) async {
     final res = await _send(
-      () => _client.get(Uri.parse(url), headers: _headers(url, headers, fetchScope)),
+      () => _client.get(Uri.parse(url), headers: {...?headers}),
       url,
       retry,
     );
@@ -64,6 +59,17 @@ class HttpService {
       retry,
     );
     return _asJson(res, url);
+  }
+
+  /// 同 [getJson] 的发送/重试/解码管线，但允许顶层是数组或标量
+  /// （词典 `/en/<word>` 可能返回数组，`/dict` 等返回对象）。
+  Future<dynamic> getJsonAny(String url, {Map<String, String>? headers, RetryPolicy retry = RetryPolicy.none}) async {
+    final res = await _send(
+      () => _client.get(Uri.parse(url), headers: {..._jsonHeaders, ...?headers}),
+      url,
+      retry,
+    );
+    return _decodeJson(res, url);
   }
 
   Future<Map<String, dynamic>> postJson(
@@ -135,25 +141,26 @@ class HttpService {
     return AppException('http$s', '请求失败（$s）', detail: 'HTTP $s', status: s);
   }
 
-  Map<String, String> _headers(String url, Map<String, String>? extra, bool fetchScope) {
-    if (!fetchScope) return {...?extra};
-    return {...?_cfg?.fetchHeadersFor(url), ...?extra};
-  }
-
   static const _jsonHeaders = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   };
 
   Map<String, dynamic> _asJson(http.Response res, String url) {
+    final v = _decodeJson(res, url);
+    if (v is Map) return Map<String, dynamic>.from(v);
+    throw AppException('badJson', '接口返回了非预期的结构', detail: '${v.runtimeType}');
+  }
+
+  /// 解码响应体为 JSON：空 body 抛 `emptyBody`，坏 JSON 抛 `badJson`；
+  /// 顶层可以是对象/数组/标量（由调用方决定如何收窄）。
+  dynamic _decodeJson(http.Response res, String url) {
     final text = _decodeBody(res);
     if (text.trim().isEmpty) {
       throw AppException('emptyBody', '接口返回了空内容', detail: url);
     }
     try {
-      final v = jsonDecode(text);
-      if (v is Map) return Map<String, dynamic>.from(v);
-      throw AppException('badJson', '接口返回了非预期的结构', detail: '${v.runtimeType}');
+      return jsonDecode(text);
     } on FormatException catch (e) {
       final head = text.length > 120 ? '${text.substring(0, 120)}…' : text;
       throw AppException('badJson', '接口返回的不是合法 JSON', detail: '${e.message} · $head');
