@@ -9,7 +9,7 @@ import 'package:toneup_read/widgets/go_update_sheet.dart';
 
 import 'fake_db.dart';
 
-const _apkUrl = 'https://github.com/YOUR_GITHUB_OWNER/YOUR_GITHUB_REPO/releases/latest/download/ToneUP-read.apk';
+const _apkUrl = 'https://github.com/hbt123-123/ToneUp_read/releases/latest/download/ToneUP-read.apk';
 
 UpdateInfo _info({String notes = '修了几个 bug'}) => UpdateInfo(
       version: '3.6.0',

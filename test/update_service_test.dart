@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const _apkUrl = 'https://github.com/YOUR_GITHUB_OWNER/YOUR_GITHUB_REPO/releases/latest/download/ToneUP-read.apk';
+const _apkUrl = 'https://github.com/hbt123-123/ToneUp_read/releases/latest/download/ToneUP-read.apk';
 
 Map<String, Object?> _payload({
   String version = '3.6.0',

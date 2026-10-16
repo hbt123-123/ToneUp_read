@@ -63,8 +63,8 @@ class UpdateInfo {
 /// 不走 `api.github.com`（国内不稳）。三类第三方反代只作为**通道**，安全边界是
 /// Android 的 APK 签名校验（所有版本共用 legacy/key.jks），sha256 只负责完整性。
 class UpdateService {
-  static const _owner = 'YOUR_GITHUB_OWNER';
-  static const _repo = 'YOUR_GITHUB_REPO';
+  static const _owner = 'hbt123-123';
+  static const _repo = 'ToneUp_read';
   static const _releaseBase = 'https://github.com/$_owner/$_repo/releases/latest/download';
 
   /// 元数据固定链接（资产名必须固定，见 tool/release.ps1）。

@@ -58,7 +58,7 @@ if ([string]::IsNullOrWhiteSpace($notes)) {
 # —— 5. 生成产物 ——
 $dist = Join-Path (Get-Location) 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$url = 'https://github.com/YOUR_GITHUB_OWNER/YOUR_GITHUB_REPO/releases/latest/download/ToneUP-read.apk'
+$url = 'https://github.com/hbt123-123/ToneUp_read/releases/latest/download/ToneUP-read.apk'
 $obj = [ordered]@{
     version     = $pubVer
     versionCode = $pubCode
