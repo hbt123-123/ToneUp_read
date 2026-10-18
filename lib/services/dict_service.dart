@@ -31,7 +31,7 @@ class DictService {
     final w = word.trim();
     final key = _cfg.gatewayKey.trim();
     if (key.isEmpty) {
-      throw const AppException('llmKey', '尚未配置翻译网关密钥，请到「我的 → 服务配置」填写');
+      throw const AppException('llmKey', '本应用未内置翻译网关密钥，无法查词');
     }
     final base = _cfg.gatewayBase;
     final headers = {'Authorization': 'Bearer $key'};

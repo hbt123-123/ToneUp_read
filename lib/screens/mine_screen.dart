@@ -71,30 +71,6 @@ class _MineScreenState extends ConsumerState<MineScreen> {
     }
   }
 
-  // ================= 服务配置 =================
-
-  /// 密钥掩码：未配置显示「未配置」，已配置显示 •••• + 末 4 位。
-  String _maskKey(String key) {
-    final k = key.trim();
-    if (k.isEmpty) return '未配置';
-    if (k.length <= 4) return '••••$k';
-    return '••••${k.substring(k.length - 4)}';
-  }
-
-  /// 编辑一项服务配置：取消不动，保存后 toast「已保存」。
-  Future<void> _editRemote({
-    required String title,
-    required String hint,
-    required String initial,
-    required Future<void> Function(String value) save,
-  }) async {
-    final v = await _prompt(title, hint, initial);
-    if (v == null) return;
-    await save(v.trim());
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存')));
-  }
-
   Future<bool?> _confirm(String title, String content, {String confirmText = '确定'}) {
     return showDialog<bool>(
       context: context,
@@ -112,7 +88,6 @@ class _MineScreenState extends ConsumerState<MineScreen> {
   @override
   Widget build(BuildContext context) {
     final update = ref.watch(updateProvider);
-    final cfg = ref.watch(appConfigProvider);
 
     return GoPage(
       topPad: false,
@@ -125,84 +100,6 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                 child: GoStagger(
                   spacing: Go.sp8,
                   children: [
-                    // —— 服务配置 ——
-                    GoSection(
-                      title: '服务配置',
-                      children: [
-                        _hint('文章接口提供文章列表与正文，翻译网关提供点词释义与句子翻译'),
-                        GoCard(
-                          padding: EdgeInsets.zero,
-                          child: Column(
-                            children: [
-                              _navRow(
-                                icon: 'book',
-                                title: '文章接口地址',
-                                sub: cfg.articleApiBase,
-                                onTap: () => _editRemote(
-                                  title: '文章接口地址',
-                                  hint: '云端文章服务根地址',
-                                  initial: cfg.articleApiBase,
-                                  save: (v) => cfg.setRemote(articleApiBase: v),
-                                ),
-                              ),
-                              _navRow(
-                                icon: 'lock',
-                                title: '文章接口密钥',
-                                sub: _maskKey(cfg.articleApiKey),
-                                onTap: () => _editRemote(
-                                  title: '文章接口密钥',
-                                  hint: '显示为掩码；重新输入可覆盖，留空则清空',
-                                  initial: '',
-                                  save: (v) => cfg.setRemote(articleApiKey: v),
-                                ),
-                              ),
-                              _navRow(
-                                icon: 'translate',
-                                title: '翻译网关地址',
-                                sub: cfg.gatewayBase,
-                                onTap: () => _editRemote(
-                                  title: '翻译网关地址',
-                                  hint: '翻译/词典网关根地址',
-                                  initial: cfg.gatewayBase,
-                                  save: (v) => cfg.setRemote(gatewayBase: v),
-                                ),
-                              ),
-                              _navRow(
-                                icon: 'eye',
-                                title: '翻译网关密钥',
-                                sub: _maskKey(cfg.gatewayKey),
-                                onTap: () => _editRemote(
-                                  title: '翻译网关密钥',
-                                  hint: '显示为掩码；重新输入可覆盖，留空则清空',
-                                  initial: '',
-                                  save: (v) => cfg.setRemote(gatewayKey: v),
-                                ),
-                              ),
-                              _navRow(
-                                icon: 'robot',
-                                title: '翻译模型',
-                                sub: cfg.gatewayModel,
-                                onTap: () => _editRemote(
-                                  title: '翻译模型',
-                                  hint: '网关使用的模型标识，如 tencent/Hunyuan-MT-7B',
-                                  initial: cfg.gatewayModel,
-                                  save: (v) => cfg.setRemote(gatewayModel: v),
-                                ),
-                                divider: false,
-                              ),
-                            ],
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(top: Go.sp4),
-                          child: Text(
-                            '密钥仅存本机加密存储；文章列表与翻译都依赖这两个服务',
-                            style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurface3),
-                          ),
-                        ),
-                      ],
-                    ),
-
                     // —— 数据管理 ——
                     GoSection(
                       title: '数据管理',
@@ -224,12 +121,12 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                               _navRow(
                                 icon: 'alert',
                                 title: '清空全部数据',
-                                sub: '删除文章、词汇与句子，保留服务配置',
+                                sub: '删除文章、词汇与句子',
                                 danger: true,
                                 onTap: () async {
                                   final ok = await _confirm(
                                     '清空全部数据',
-                                    '将删除文章、词汇与句子，且不可恢复。服务配置会保留。',
+                                    '将删除文章、词汇与句子，且不可恢复。',
                                     confirmText: '清空',
                                   );
                                   if (ok == true) await ref.read(dbProvider).clearAll();
@@ -282,34 +179,6 @@ class _MineScreenState extends ConsumerState<MineScreen> {
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _hint(String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(Go.sp5, 0, Go.sp5, Go.sp3),
-        child: Text(text, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-      );
-
-  Future<String?> _prompt(String title, String hint, String initial, {int maxLines = 1}) {
-    final ctrl = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(title),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(hint, style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurface3)),
-            const SizedBox(height: Go.sp3),
-            GoField(controller: ctrl, maxLines: maxLines),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(c, ctrl.text), child: const Text('保存')),
         ],
       ),
     );

@@ -117,19 +117,7 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
     } catch (e) {
       if (!mounted) return;
       final msg = errText(e);
-      if (msg.contains('未配置')) {
-        final ok = await showDialog<bool>(
-          context: context,
-          builder: (c) => AlertDialog(
-            title: const Text('未配置翻译模型'),
-            content: const Text('需要先在『我的 → 服务配置』填写翻译网关密钥，是否前往？'),
-            actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('前往'))],
-          ),
-        );
-        if (ok == true) ref.read(tabIndexProvider.notifier).set(3);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg.length > 60 ? msg.substring(0, 60) : msg)));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg.length > 60 ? msg.substring(0, 60) : msg)));
     } finally {
       if (mounted) setState(() => s['_analyzing'] = false);
     }

@@ -25,7 +25,7 @@ class LlmService {
     if (key.isEmpty) {
       throw AppException(
         'llmKey',
-        '尚未配置翻译网关密钥，请到「我的 → 服务配置」填写网关密钥',
+        '本应用未内置翻译网关密钥，无法翻译',
       );
     }
     final url = '${_cfg.gatewayBase}/v1/chat/completions';
@@ -63,11 +63,11 @@ class LlmService {
   AppException _readable(AppException e) {
     switch (e.code) {
       case 'http401':
-        return AppException('llmKey', '网关密钥无效或已失效（401），请到「我的 → 服务配置」检查网关密钥', detail: e.detail, status: e.status);
+        return AppException('llmKey', '网关密钥无效或已失效（401），请联系服务提供方', detail: e.detail, status: e.status);
       case 'http403':
-        return AppException('llmKey', '网关拒绝访问（403），请到「我的 → 服务配置」检查网关密钥与地址', detail: e.detail, status: e.status);
+        return AppException('llmKey', '网关拒绝访问（403），该网关密钥可能无权访问此模型', detail: e.detail, status: e.status);
       case 'http404':
-        return AppException('llmUrl', '网关地址不存在（404），请检查网关地址是否写全', detail: e.detail, status: e.status);
+        return AppException('llmUrl', '翻译网关地址不存在（404）', detail: e.detail, status: e.status);
       case 'http429':
         return AppException('llmRate', '翻译网关被限流（429），请稍后再试', detail: e.detail, status: e.status, retryable: true);
       case 'badJson':

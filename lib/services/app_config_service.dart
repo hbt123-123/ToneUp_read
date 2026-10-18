@@ -12,16 +12,22 @@ class AppConfigService extends ChangeNotifier {
   double _fontSize = 18;
   double _lineHeight = 1.8;
 
-  // 云端配置：接口地址走 SharedPreferences（可明文），密钥走 Keystore（默认空，不内置任何 key）。
+  // 云端配置：地址与密钥全部内置在 App 里，用户既看不到也改不了（「我的」页已无服务配置入口）。
+  // 密钥不落源码，构建时用 --dart-define 注入，见 tool/release.ps1。
   String _articleApiBase = defaultArticleApiBase;
   String _gatewayBase = defaultGatewayBase;
   String _gatewayModel = defaultGatewayModel;
-  String _articleApiKey = '';
-  String _gatewayKey = '';
+  String _articleApiKey = defaultArticleApiKey;
+  String _gatewayKey = defaultGatewayKey;
 
   static const defaultArticleApiBase = 'https://read.tu.lztfirefly.top';
   static const defaultGatewayBase = 'https://gateway.lztfirefly.top';
   static const defaultGatewayModel = 'tencent/Hunyuan-MT-7B';
+
+  /// 构建时注入：`--dart-define=ARTICLE_API_KEY=xxx` / `--dart-define=GATEWAY_KEY=xxx`。
+  /// 未注入时为空串，App 取不到云端数据——这是源码裸构建的预期行为。
+  static const defaultArticleApiKey = String.fromEnvironment('ARTICLE_API_KEY');
+  static const defaultGatewayKey = String.fromEnvironment('GATEWAY_KEY');
 
   static const _kArticleApiBase = 'article_api_base';
   static const _kGatewayBase = 'gateway_base';
@@ -86,8 +92,13 @@ class AppConfigService extends ChangeNotifier {
     _articleApiBase = _prefs!.getString(_kArticleApiBase) ?? defaultArticleApiBase;
     _gatewayBase = _prefs!.getString(_kGatewayBase) ?? defaultGatewayBase;
     _gatewayModel = _prefs!.getString(_kGatewayModel) ?? defaultGatewayModel;
-    _articleApiKey = await _readSecret(_sArticleApiKey, _kArticleApiKey) ?? '';
-    _gatewayKey = await _readSecret(_sGatewayKey, _kGatewayKey) ?? '';
+    // 内置密钥优先。只有源码裸构建（未注入）时才回落到本机存的旧值。
+    _articleApiKey = defaultArticleApiKey.isNotEmpty
+        ? defaultArticleApiKey
+        : (await _readSecret(_sArticleApiKey, _kArticleApiKey) ?? '');
+    _gatewayKey = defaultGatewayKey.isNotEmpty
+        ? defaultGatewayKey
+        : (await _readSecret(_sGatewayKey, _kGatewayKey) ?? '');
   }
 
   Future<String?> _readSecret(String secureKey, String legacyKey) async {

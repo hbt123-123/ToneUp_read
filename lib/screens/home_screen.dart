@@ -363,15 +363,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     // 正文缓存成功 / 列表刷新后由 articleRevision 驱动「已缓存」小标更新。
     ref.listen(articleRevisionProvider, (_, _) => _refreshCached());
-    // 「我的 → 服务配置」填好密钥后回到首页自动重拉一次。
-    // （延迟到帧结束再拉，避免在 provider 通知/构建期间同步 setState。）
-    ref.listen(appConfigProvider, (_, _) {
-      final cfg = ref.read(appConfigProvider);
-      if (_noKey && cfg.articleApiKey.trim().isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _loadFirst());
-      }
-    });
-    // 未配置密钥时的引导横幅；监听配置变化（填好 key 后自动出现/消失）。
+    // 未内置密钥时首页显提示横幅（正常发布版不会出现）。
     final cfg = ref.watch(appConfigProvider);
     _noKey = cfg.articleApiKey.trim().isEmpty;
 
@@ -414,41 +406,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return _list();
   }
 
-  /// 未配置文章接口密钥的引导横幅（点按去「我的」）。
+  /// 未内置文章接口密钥时的提示横幅（正常发布版不会出现）。
   Widget _keyBanner() {
-    return GestureDetector(
-      onTap: _goMine,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
-        padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp4, Go.sp3),
-        decoration: BoxDecoration(
-          color: Go.primary90,
-          borderRadius: BorderRadius.circular(Go.rMd),
-          border: Border.all(color: Go.primary.withValues(alpha: 0.45), width: 0.5),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            GoIcon('settings', size: 16, color: Go.primary),
-            SizedBox(width: Go.sp3),
-            Expanded(
-              child: Text(
-                '请到『我的 → 服务配置』填写文章接口密钥',
-                style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
-              ),
+    return Container(
+      margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
+      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp4, Go.sp3),
+      decoration: BoxDecoration(
+        color: Go.primary90,
+        borderRadius: BorderRadius.circular(Go.rMd),
+        border: Border.all(color: Go.primary.withValues(alpha: 0.45), width: 0.5),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: const [
+          GoIcon('settings', size: 16, color: Go.primary),
+          SizedBox(width: Go.sp3),
+          Expanded(
+            child: Text(
+              '本应用未内置文章接口密钥，暂时无法加载文章',
+              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
             ),
-            SizedBox(width: Go.sp3),
-            Text(
-              '去配置 →',
-              style: TextStyle(
-                fontSize: Go.fsMeta,
-                fontWeight: FontWeight.w700,
-                color: Go.primary,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -593,11 +572,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       children: [
         GoEmpty(
           icon: _noKey ? 'settings' : 'book',
-          title: _noKey ? '还没配置文章接口' : '这里还没有文章',
-          desc: _noKey ? '请到『我的 → 服务配置』填写文章接口密钥' : '下拉刷新试试',
+          title: _noKey ? '缺少文章接口密钥' : '这里还没有文章',
+          desc: _noKey ? '本应用未内置文章接口密钥，暂时无法加载文章' : '下拉刷新试试',
           action: GoBtn(
-            label: _noKey ? '去配置' : '刷新',
-            onTap: _noKey ? _goMine : () {
+            label: '刷新',
+            onTap: () {
               _loadFirst();
             },
           ),

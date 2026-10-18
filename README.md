@@ -32,12 +32,12 @@
   - **生词导出**：一键复制「半角逗号 + 空格」分隔的英文词表（可直接粘贴进常见背单词 App），或调用系统分享。
 - **我的**
 
-  - 服务配置：文章接口地址 / 密钥、翻译网关地址 / 密钥 / 模型（内置默认地址；密钥不内置，首次使用需自行填写）。
+  - 无需配置：文章接口与翻译网关的地址、密钥、模型全部内置，装上即用。
   - 数据管理：清除缓存（文章与词典，保留词汇与句子）/ 清空全部数据。
   - 检查更新：应用内检查、下载并安装新版本。
 - **数据与隐私**
 
-  无账号、无登录。接口密钥存 Android Keystore（不参与云备份），普通配置存本机 `shared_preferences`；文章缓存、生词、句子与阅读数据全部只在本机数据库。
+  无账号、无登录。接口密钥编译在 APK 里，源码与仓库中都查不到；设置项存本机 `shared_preferences`；文章缓存、生词、句子与阅读数据全部只在本机数据库。
 
 ---
 
@@ -90,14 +90,17 @@ flutter pub get
 flutter run                      # 连真机 / 模拟器运行
 flutter test                     # 跑全部测试
 flutter analyze                  # 静态分析
-flutter build apk --release      # 产物：build/app/outputs/flutter-apk/app-release.apk
+flutter build apk --release `
+  --dart-define=ARTICLE_API_KEY=<文章接口密钥> `
+  --dart-define=GATEWAY_KEY=<翻译网关密钥>   # 密钥必须在构建期注入
 ```
 
 几点说明：
 
 - 仅支持 `Android`，`applicationId` 为 `top.toneup.read`。
 - 构建前需要 `android/key.properties`（`storePassword` / `keyPassword` / `keyAlias` / `storeFile`，keystore 用 `legacy/key.jks`）。该文件不入库，缺失时 Gradle 配置阶段直接失败（预期行为）；`debug` 与 `release` 复用同一套签名，可直接覆盖安装旧版且数据不丢。
-- 首次使用请在「我的 → 服务配置」里填写文章接口与翻译网关的地址和密钥（内置默认地址；密钥只存本机 Keystore）。
+- **密钥只在构建期注入，不写进源码**：手动 `flutter build apk` 要自己补上面两条 `--dart-define`；用 `tool\release.ps1` 发布时脚本会自动注入（优先环境变量 `ARTICLE_API_KEY` / `GATEWAY_KEY`，其次读不入库的 `tool\secrets.local.ps1`）。没注入的话装出来首页拉不到文章、点词也查不了。用户侧无需任何配置。
+- 应用内无需填写任何服务地址或密钥——文章接口与翻译网关都已内置。
 - 朗读依赖系统 `TTS`：`Android 11+` 需要在 `AndroidManifest.xml` 的 `<queries>` 中声明 `android.intent.action.TTS_SERVICE`（仓库里已声明，升级 Flutter 插件后请留意别被覆盖）。
 - 写界面时注意：**别给可能放大的文字套固定高度**，系统字号放大后会被裁切（回归用例：`test/home_article_list_test.dart`）。
 - 发布：`powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion X.Y.Z`，产物在 `dist/`。上传 GitHub Release 后需 **Publish**；客户端按 `releases/latest/download/` 固定链接更新，资产名 `ToneUP-read.apk` 与 `version.json` 不能改。
