@@ -1,26 +1,5 @@
 <div align="center">
 
-<img src="assets/icon/app_icon.png" alt="ToneUP·read（一潼上岸·阅读）" width="150"/>
-
-<h1>ToneUP·read（一潼上岸·阅读）</h1>
-
-<p align="center">
-  一个<b>云端驱动的英语时文阅读 App</b>：首页文章卡片流 → 沉浸式阅读器，<br/>
-  点词查词、长按取句、句子翻译与收藏、生词复习与导出。<br/>
-  文章列表与翻译由自建云端服务提供；无需注册账号，阅读记录与生词只存在你自己的手机上。
-</p>
-
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" height="20"></a>
-  <img src="https://img.shields.io/github/stars/hbt123-123/ToneUp_read" alt="Stars" height="20">
-  <img src="https://img.shields.io/github/release/hbt123-123/ToneUp_read.svg" alt="Release" height="20">
-  <img src="https://img.shields.io/badge/Android-3DDC84?style=flat&logo=android&logoColor=white" alt="Platform" height="20">
-  <img src="https://img.shields.io/badge/Flutter-3.47.5-3DDC84?style=flat&logo=flutter&logoColor=white" alt="Flutter" height="20">
-  <img src="https://img.shields.io/badge/Github-181717?style=flat&logo=github&logoColor=white" alt="Github" height="20">
-</p>
-
-</div>
-
 ---
 
 > [!NOTE]
@@ -33,7 +12,6 @@
   - 从自建文章接口拉取列表，卡片展示中文标题（客户端机翻并落库缓存）、来源、发布时间与词数。
   - 来源筛选、下拉刷新、滚动到底自动加载更多（每页 20 条）；已缓存文章带「已缓存」小标。
   - 点卡片自动缓存正文后进入阅读器；拉取失败自动回落本地已缓存列表，离线也能读缓存过的文章。
-
 - **沉浸式阅读器**
 
   - 字号 / 行距可调并本地记忆；深色主题 + 地球动效背景。
@@ -43,24 +21,20 @@
   - **AI 精选**：`LLM` 把长文压成精读版，可随时切回原文、重新精选或删除，并给出「段落 / 字数」精简摘要。
   - **朗读**：调用系统原生 `TTS`，支持全文 / 选句 / 单词卡朗读。
   - **打开原文**：正文未缓存或需要对照原站时，一键在浏览器打开文章原始链接。
-
 - **句子**
 
   收藏的句子集中管理：网关翻译、朗读、复制、回到原文定位、`LLM` 语法 / 语块拆解。
-
 - **词汇**
 
   - 阅读中点词自动沉淀，记录出现次数与原句出处；支持「全部 / 单词 / 短语」筛选。
   - **间隔复习**：待复习卡片进入复习页，四档评分（忘了 / 模糊 / 记得 / 轻松）安排下次复习。
   - **AI 整理**：把查询过的生词按主题聚类，补全词性、释义、词族与例句。
   - **生词导出**：一键复制「半角逗号 + 空格」分隔的英文词表（可直接粘贴进常见背单词 App），或调用系统分享。
-
 - **我的**
 
   - 服务配置：文章接口地址 / 密钥、翻译网关地址 / 密钥 / 模型（内置默认地址；密钥不内置，首次使用需自行填写）。
   - 数据管理：清除缓存（文章与词典，保留词汇与句子）/ 清空全部数据。
   - 检查更新：应用内检查、下载并安装新版本。
-
 - **数据与隐私**
 
   无账号、无登录。接口密钥存 Android Keystore（不参与云备份），普通配置存本机 `shared_preferences`；文章缓存、生词、句子与阅读数据全部只在本机数据库。
@@ -142,7 +116,10 @@ flutter build apk --release      # 产物：build/app/outputs/flutter-apk/app-re
 
 ## 致谢
 
-- 本项目（ToneUP·read / 一潼上岸·阅读）基于开源项目 [GlobalOverview](https://github.com/None-Ptr/GlobalOverview)（作者 ShaDouBuShi123 & _Null_Ptr，MIT License）改装而来，原项目提供了英语时文阅读、AI 出题、错题本、单词本等核心设计与实现，在此对原作者致以诚挚的感谢。
+- 本项目（ToneUP·read / 一潼上岸·阅读）基于开[Ov](https://github.com/None-Ptr/GlobalOverview)
+- 
+- [i](https://github.com/None-Ptr/GlobalOverview)
+- [ew](https://github.com/None-Ptr/GlobalOverview)（作者 ShaDouBuShi123 & _Null_Ptr，MIT License）改装而来，原项目提供了英语时文阅读、AI 出题、错题本、单词本等核心设计与实现，在此对原作者致以诚挚的感谢。
 - 特别感谢 ShaDouBuShi123 为原项目提供的图标和大力支持。
 - 感谢 [43aquarius](https://github.com/43aquarius) 和 [HMUG12](https://github.com/HMUG12) 对原项目的贡献。
-- 本项目作者：潼潼。
+- 本项目作者：潼潼
