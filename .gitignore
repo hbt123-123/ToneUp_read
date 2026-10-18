@@ -75,3 +75,6 @@ Android-SDK@*/
 英语文章调用文档.md
 SHARE_INTENT.md
 tool/secrets.local.ps1
+
+# 打包产物：APK 走 GitHub Releases 分发，不入库
+*.apk
