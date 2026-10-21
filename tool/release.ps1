@@ -1,4 +1,4 @@
-﻿# 生成发布物并打印「上传清单」。上传动作由人工在 GitHub Release 页面完成。
+﻿﻿﻿﻿﻿﻿# 生成发布物并打印「上传清单」。上传动作由人工在 GitHub Release 页面完成。
 #
 #   powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion 3.5.0
 #
