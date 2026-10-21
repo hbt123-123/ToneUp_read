@@ -61,9 +61,14 @@ class UpdateController extends ChangeNotifier {
       try {
         await service.pruneLocal();
         final ready = await service.readyFile();
-        if (ready != null && await service.ignoredVersionCode() != ready.vc) {
-          _readyVc = ready.vc;
-          phase = UpdatePhase.ready;
+        if (ready != null) {
+          if (await service.ignoredVersionCode() == ready.vc) {
+            // 这个包已被「跳过此版本」：别再留几十 MB，也别再进入就绪态。
+            await service.discardReady();
+          } else {
+            _readyVc = ready.vc;
+            phase = UpdatePhase.ready;
+          }
         }
       } catch (_) {}
     }
@@ -73,10 +78,11 @@ class UpdateController extends ChangeNotifier {
   Future<bool> _dueForAutoCheck() async {
     final last = await service.lastCheckMs();
     if (last == 0) return true;
-    return DateTime.now().millisecondsSinceEpoch - last > _autoInterval.inMilliseconds;
+    return DateTime.now().millisecondsSinceEpoch - last >= _autoInterval.inMilliseconds;
   }
 
-  /// 启动时的静默检查：失败**不打扰**用户，只记冷却。
+  /// 启动时的静默检查：失败**不打扰**用户，也不写入「已检查」时间，
+  /// 下次打开 App 会立刻重试（镜像失败有 30 分钟冷却，不会连续打同一个坏线路）。
   /// 发现新版且未被「跳过此版本」→ 直接转入后台静默下载。
   Future<void> autoCheck() async {
     if (!await _dueForAutoCheck()) return;
@@ -107,14 +113,15 @@ class UpdateController extends ChangeNotifier {
       const minShow = Duration(milliseconds: 600);
       if (elapsed < minShow) await Future<void>.delayed(minShow - elapsed);
     }
-    await service.markChecked();
     if (remote == null) {
-      // 静默检查失败不打扰：保持原状态（已恢复的就绪包不能因为检查失败而丢）
+      // 静默检查失败不打扰：保持原状态（已恢复的就绪包不能因为检查失败而丢）。
+      // markChecked 只在成功分支写：失败一旦写入时间戳，会把重试推迟一整天。
       phase = manual ? UpdatePhase.failed : prev;
       error = manual ? '检查失败，换个线路再试试' : null;
       notifyListeners();
       return;
     }
+    await service.markChecked();
     final ignored = await service.ignoredVersionCode();
     final newer = await service.hasUpdate(remote);
     if (_readyVc >= remote.versionCode) {
@@ -141,12 +148,10 @@ class UpdateController extends ChangeNotifier {
     return true;
   }
 
-  /// 稍后：关掉卡片。available 回 idle；ready 保持就绪（红点保留，入口行可再进）。
+  /// 稍后：只关卡片，不改变状态。available 保留入口行红点，ready 保留已就绪，
+  /// 用户下次可从「我的」继续；只有「跳过此版本」才会真正抑制。
   void dismiss() {
-    if (phase == UpdatePhase.available) {
-      phase = UpdatePhase.idle;
-      notifyListeners();
-    }
+    notifyListeners();
   }
 
   /// 跳过此版本：除非出现更高版本号，否则不再提示；本地已就绪的包一并清掉。

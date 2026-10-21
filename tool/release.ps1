@@ -1,6 +1,6 @@
 ﻿﻿﻿﻿﻿﻿# 生成发布物并打印「上传清单」。上传动作由人工在 GitHub Release 页面完成。
 #
-#   powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion 3.5.0
+#   powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion 3.6.0
 #
 # 注意两个 Windows 上的坑（都已经踩过）：
 #   1. 本文件必须存成 **UTF-8 with BOM**：PowerShell 5.1 会按 GBK 解释无 BOM 的 .ps1，

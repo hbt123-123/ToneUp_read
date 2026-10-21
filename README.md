@@ -117,7 +117,7 @@ flutter build apk --release `
 - 应用内无需填写任何服务地址或密钥——文章接口与翻译网关都已内置。
 - 朗读依赖系统 `TTS`：`Android 11+` 需要在 `AndroidManifest.xml` 的 `<queries>` 中声明 `android.intent.action.TTS_SERVICE`（仓库里已声明，升级 Flutter 插件后请留意别被覆盖）。
 - 写界面时注意：**别给可能放大的文字套固定高度**，系统字号放大后会被裁切（回归用例：`test/home_article_list_test.dart`）。
-- 发布：`powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion X.Y.Z`，产物在 `dist/`。上传 GitHub Release 后需 **Publish**；客户端按 `releases/latest/download/` 固定链接更新，资产名 `ToneUP-read.apk` 与 `version.json` 不能改。
+- 发布：`powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion X.Y.Z`，产物在 `dist/`。上传 GitHub Release 后需 **Publish**；客户端按 `releases/latest/download/` 固定链接更新，资产名 `ToneUP-read.apk` 与 `version.json` 不能改。详细步骤见 [上传安装包到 GitHub Release](docs/RELEASE_UPLOAD.md)。
 
 ---
 

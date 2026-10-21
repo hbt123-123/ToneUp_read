@@ -63,18 +63,26 @@ class _UpdateReadyWatcher extends ConsumerStatefulWidget {
 
 class _UpdateReadyWatcherState extends ConsumerState<_UpdateReadyWatcher> {
   bool _prompted = false; // 每次启动最多提示一次，取消后靠「我的」入口行红点
+  UpdateController? _controller;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final c = ref.read(updateProvider);
+      _controller = c;
       await c.init();
       if (!mounted) return;
       c.addListener(_promptIfNeeded);
       await c.autoCheck();
       _promptIfNeeded();
     });
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_promptIfNeeded);
+    super.dispose();
   }
 
   void _promptIfNeeded() {
