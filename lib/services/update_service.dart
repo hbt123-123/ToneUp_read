@@ -322,24 +322,107 @@ class UpdateService {
     return out;
   }
 
+  // ——— 本地更新包状态 ———
+
+  /// 更新包目录：`<tmp>/update/`，按 versionCode 隔离文件。
+  /// `<vc>.apk.part` = 未完成下载（存在即可断点续传）；`<vc>.apk` = 已通过 sha256 校验（存在即就绪）。
+  Future<Directory> _updateDir() async {
+    final tmp = await getTemporaryDirectory();
+    final dir = Directory('${tmp.path}${Platform.pathSeparator}update');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir;
+  }
+
+  static final _vcFile = RegExp(r'^(\d+)\.apk(?:\.part)?$');
+
+  String _baseName(FileSystemEntity e) => e.path.split(Platform.pathSeparator).last;
+
+  /// 已校验就绪的安装包（versionCode 高于已安装版本里的最大者）；null = 没有。
+  Future<({int vc, File file})?> readyFile() async {
+    try {
+      final installed = await installedVersionCode();
+      final dir = await _updateDir();
+      ({int vc, File file})? best;
+      for (final e in dir.listSync()) {
+        if (e is! File) continue;
+        final name = _baseName(e);
+        final m = _vcFile.firstMatch(name);
+        if (m == null || name.endsWith('.part')) continue;
+        final vc = int.parse(m.group(1)!);
+        if (vc > installed && (best == null || vc > best.vc)) best = (vc: vc, file: e);
+      }
+      return best;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 删除已就绪的安装包（「跳过此版本」时避免几十 MB 白占空间）。
+  Future<void> discardReady() async {
+    try {
+      final dir = await _updateDir();
+      for (final e in dir.listSync()) {
+        if (e is File && !_baseName(e).endsWith('.part')) await e.delete();
+      }
+    } catch (_) {
+      // 目录不存在/文件被占用：忽略，不影响主流程
+    }
+  }
+
+  /// 清理已安装版本及以下的残留文件（装完新版本后启动时调用）。
+  Future<void> pruneLocal() async {
+    try {
+      final installed = await installedVersionCode();
+      final dir = await _updateDir();
+      for (final e in dir.listSync()) {
+        if (e is! File) continue;
+        final m = _vcFile.firstMatch(_baseName(e));
+        if (m != null && int.parse(m.group(1)!) <= installed) await e.delete();
+      }
+    } catch (_) {
+      // 同上：本地清理失败不该影响检查更新
+    }
+  }
+
   // ——— 下载 ———
 
-  /// 流式下载 + 边下边算 sha256；校验不过就删文件并抛异常，**绝不交给安装器**。
+  /// 断点续传下载：写入 `<vc>.apk.part`（已有部分发 `Range` 请求接着下），
+  /// 流结束后对整个文件统一算 sha256，通过才转正为 `<vc>.apk`。
+  /// 返回的文件一定是校验通过的；校验不过删文件抛 [UpdateChecksumException]，**绝不交给安装器**。
   Future<File> download(
     UpdateInfo info, {
     void Function(int received, int total)? onProgress,
   }) async {
     if (!urlAllowed(info.url)) throw const UpdateChecksumException();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/ToneUP-read.apk');
+    final dir = await _updateDir();
+    final apk = File('${dir.path}${Platform.pathSeparator}${info.versionCode}.apk');
+    final part = File('${dir.path}${Platform.pathSeparator}${info.versionCode}.apk.part');
+    if (apk.existsSync()) {
+      onProgress?.call(info.size, info.size); // 跨会话复用已就绪的包，不再发请求
+      return apk;
+    }
+    if (info.size > 0 && part.existsSync() && part.lengthSync() > info.size) {
+      part.deleteSync(); // 比预期还长：脏数据，重头下
+    }
     // 下载不做冷却过滤：优先沿用记住的端点，不行再直连/逐个镜像，最多试 3 个。
     final hosts = _orderedHosts(await _okHost(), const <String, int>{}).take(_downloadBudget).toList();
 
     Object? lastError;
     for (final host in hosts) {
       try {
-        await _downloadFrom(host, info, file, onProgress);
-        return file;
+        await _downloadFrom(host, info, part, onProgress);
+        // 断点续传下 hash 状态无法跨请求积累，只能对整个文件统一算
+        final len = part.lengthSync();
+        if (info.size > 0 && len < info.size) {
+          // 流被提前掐断：part 保留，换下一个端点从断点接着下
+          throw Exception('下载不完整（$len/${info.size}）');
+        }
+        final digest = await sha256.bind(part.openRead()).first;
+        if (digest.toString() != info.sha256) {
+          await part.delete();
+          throw const UpdateChecksumException();
+        }
+        return part.renameSync(apk.path);
       } catch (e) {
         lastError = e;
       }
@@ -351,23 +434,28 @@ class UpdateService {
   Future<void> _downloadFrom(
     String host,
     UpdateInfo info,
-    File file,
+    File part,
     void Function(int, int)? onProgress,
   ) async {
+    var offset = part.existsSync() ? part.lengthSync() : 0;
     final client = _open();
     try {
-      final res = await client.send(http.Request('GET', _via(host, info.url))).timeout(endpointTimeout);
-      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-      final total = res.contentLength ?? info.size;
-      final out = file.openWrite();
-      final digest = _DigestSink();
-      final hasher = sha256.startChunkedConversion(digest);
-      var got = 0;
+      final req = http.Request('GET', _via(host, info.url));
+      if (offset > 0) req.headers['range'] = 'bytes=$offset-';
+      final res = await client.send(req).timeout(endpointTimeout);
+      if (res.statusCode != 200 && res.statusCode != 206) throw Exception('HTTP ${res.statusCode}');
+      if (offset > 0 && res.statusCode != 206) {
+        // 端点不支持 Range（回了 200 全量）：丢掉旧 part 重头来
+        offset = 0;
+        await part.writeAsBytes(const <int>[], flush: true);
+      }
+      final total = res.contentLength != null ? offset + res.contentLength! : info.size;
+      final out = part.openWrite(mode: FileMode.append);
+      var got = offset;
       var lastTick = 0;
       try {
         await for (final chunk in res.stream) {
           got += chunk.length;
-          hasher.add(chunk);
           out.add(chunk);
           final now = DateTime.now().millisecondsSinceEpoch;
           if (onProgress != null && (now - lastTick > 200 || got == total)) {
@@ -376,19 +464,10 @@ class UpdateService {
           }
         }
       } finally {
-        hasher.close();
         await out.flush();
         await out.close();
       }
       onProgress?.call(got, total);
-      if (digest.value.toString() != info.sha256) {
-        await file.delete();
-        throw const UpdateChecksumException();
-      }
-      if (info.size > 0 && got != info.size) {
-        await file.delete();
-        throw const UpdateChecksumException();
-      }
     } finally {
       _close(client);
     }
@@ -417,13 +496,4 @@ class UpdateService {
     final r = await OpenFilex.open(apk.path, type: 'application/vnd.android.package-archive');
     return r.type == ResultType.done ? null : r.message;
   }
-}
-
-/// 供 `sha256.startChunkedConversion` 收集结果（省掉一个 convert 依赖）。
-class _DigestSink implements Sink<Digest> {
-  late Digest value;
-  @override
-  void add(Digest data) => value = data;
-  @override
-  void close() {}
 }

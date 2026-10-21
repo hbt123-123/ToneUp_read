@@ -82,6 +82,38 @@ void main() {
     expect(find.textContaining('第 299 行'), findsOneWidget);
   });
 
+  testWidgets('就绪态：标题切为「新版本已就绪」，提供立即安装/稍后', (tester) async {
+    final c = UpdateController(UpdateService())
+      ..installedLabel = 'v3.5.0'
+      ..info = _info()
+      ..phase = UpdatePhase.ready;
+    await _openSheet(tester, c);
+
+    expect(find.text('新版本已就绪'), findsOneWidget);
+    expect(find.textContaining('已下载完成'), findsOneWidget);
+    expect(find.text('立即安装'), findsOneWidget);
+    expect(find.text('稍后'), findsOneWidget);
+    expect(find.text('立即更新'), findsNothing, reason: '就绪态不该再出现「立即更新」');
+  });
+
+  testWidgets('「我的」入口：就绪态显示「已就绪，点击安装」并点亮红点', (tester) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(FakeDb())],
+      child: const MaterialApp(home: MineScreen()),
+    ));
+    final container = ProviderScope.containerOf(tester.element(find.byType(MineScreen)));
+    final c = container.read(updateProvider);
+    c.phase = UpdatePhase.ready;
+    c.notifyListeners();
+    await tester.pump();
+
+    expect(find.text('已就绪，点击安装'), findsOneWidget);
+  });
+
   testWidgets('下载中显示百分比与已下载大小，校验中改文案', (tester) async {
     final c = UpdateController(UpdateService())
       ..installedLabel = 'v3.5.0'

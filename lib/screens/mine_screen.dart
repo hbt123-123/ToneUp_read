@@ -30,8 +30,9 @@ class _MineScreenState extends ConsumerState<MineScreen> {
         UpdatePhase.available => '发现 v${c.info?.version ?? ''}',
         UpdatePhase.latest => '已是最新版本',
         UpdatePhase.failed => c.error ?? '检查失败',
-        UpdatePhase.downloading => '正在下载…',
+        UpdatePhase.downloading => c.total > 0 ? '后台下载中 ${(c.progress * 100).toStringAsFixed(0)}%' : '后台下载中…',
         UpdatePhase.verifying => '正在校验…',
+        UpdatePhase.ready => '已就绪，点击安装',
         UpdatePhase.installing => '等待安装确认',
         _ => c.installedLabel.isEmpty ? '当前版本' : '当前 ${c.installedLabel}',
       };
@@ -54,6 +55,8 @@ class _MineScreenState extends ConsumerState<MineScreen> {
       case UpdatePhase.failed:
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(c.error ?? '检查失败')));
       case UpdatePhase.available:
+      case UpdatePhase.ready:
+      case UpdatePhase.downloading:
         await showGoUpdateSheet(context, c);
       default:
         break;
@@ -152,8 +155,8 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                             sub: _updateSub(update),
                             onTap: _checkUpdate,
                             spin: update.phase == UpdatePhase.checking,
-                            dot: update.phase == UpdatePhase.available,
-                            highlight: update.phase == UpdatePhase.available,
+                            dot: update.phase == UpdatePhase.available || update.phase == UpdatePhase.ready,
+                            highlight: update.phase == UpdatePhase.available || update.phase == UpdatePhase.ready,
                             divider: false,
                           ),
                         ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:toneup_read/services/update_service.dart';
 
@@ -10,14 +12,17 @@ enum UpdatePhase {
   /// 已是最新
   latest,
 
-  /// 有新版待用户决定
+  /// 有新版待用户决定（静默下载失败后的手动兜底）
   available,
 
-  /// 下载中
+  /// 后台静默下载中
   downloading,
 
   /// 校验中（下载完的 sha256 比对阶段）
   verifying,
+
+  /// 安装包已就绪待安装（下载完自动提示；取消后本会话不再弹，红点保留）
+  ready,
 
   /// 已交给系统安装器
   installing,
@@ -26,8 +31,8 @@ enum UpdatePhase {
   failed,
 }
 
-/// 更新流程的界面状态机：策略（每天一次、只弹一次、跳过此版本）都在这里，
-/// 页面只负责渲染 [phase]。
+/// 更新流程的界面状态机：策略（每天一次检查、发现新版静默下载、只弹一次、
+/// 跳过此版本）都在这里，页面只负责渲染 [phase]。
 class UpdateController extends ChangeNotifier {
   final UpdateService service;
   UpdateController(this.service);
@@ -39,6 +44,9 @@ class UpdateController extends ChangeNotifier {
   int total = 0;
   String installedLabel = '';
 
+  /// 本地已就绪的安装包 versionCode（0 = 无）。
+  int _readyVc = 0;
+
   double get progress => total > 0 ? (received / total).clamp(0, 1) : 0;
 
   /// 自动检查是否过期（每天最多一次）。
@@ -47,6 +55,18 @@ class UpdateController extends ChangeNotifier {
   Future<void> init() async {
     final v = await service.installedVersion();
     installedLabel = 'v$v';
+    // 恢复本地下载状态：上次会话下完没装 → 直接进入就绪态；下载到一半 → 交给
+    // download() 里按 part 文件长度断点续传。失败静默吞掉（临时目录可能不可用）。
+    if (phase == UpdatePhase.idle) {
+      try {
+        await service.pruneLocal();
+        final ready = await service.readyFile();
+        if (ready != null && await service.ignoredVersionCode() != ready.vc) {
+          _readyVc = ready.vc;
+          phase = UpdatePhase.ready;
+        }
+      } catch (_) {}
+    }
     notifyListeners();
   }
 
@@ -57,16 +77,25 @@ class UpdateController extends ChangeNotifier {
   }
 
   /// 启动时的静默检查：失败**不打扰**用户，只记冷却。
+  /// 发现新版且未被「跳过此版本」→ 直接转入后台静默下载。
   Future<void> autoCheck() async {
     if (!await _dueForAutoCheck()) return;
     await _check(manual: false);
+    if (phase == UpdatePhase.available && info != null) {
+      unawaited(backgroundDownload());
+    }
   }
 
   /// 手动检查：失败要说清原因，且不受「每天一次」限制。
   Future<void> checkNow() => _check(manual: true);
 
   Future<void> _check({required bool manual}) async {
-    if (phase == UpdatePhase.checking || phase == UpdatePhase.downloading) return;
+    if (phase == UpdatePhase.checking ||
+        phase == UpdatePhase.downloading ||
+        phase == UpdatePhase.verifying) {
+      return;
+    }
+    final prev = phase; // 失败回退用：已恢复的就绪态不能被一次失败的检查冲掉
     phase = UpdatePhase.checking;
     error = null;
     notifyListeners();
@@ -80,15 +109,25 @@ class UpdateController extends ChangeNotifier {
     }
     await service.markChecked();
     if (remote == null) {
-      phase = manual ? UpdatePhase.failed : UpdatePhase.idle;
+      // 静默检查失败不打扰：保持原状态（已恢复的就绪包不能因为检查失败而丢）
+      phase = manual ? UpdatePhase.failed : prev;
       error = manual ? '检查失败，换个线路再试试' : null;
       notifyListeners();
       return;
     }
     final ignored = await service.ignoredVersionCode();
-    info = remote;
     final newer = await service.hasUpdate(remote);
-    phase = newer && remote.versionCode != ignored ? UpdatePhase.available : UpdatePhase.latest;
+    if (_readyVc >= remote.versionCode) {
+      // 本地就绪包就是（或高于）远端目标版本：保持就绪，顺便补充展示信息
+      info = remote;
+      phase = UpdatePhase.ready;
+    } else if (newer && remote.versionCode != ignored) {
+      info = remote;
+      phase = UpdatePhase.available;
+    } else {
+      info = remote;
+      phase = UpdatePhase.latest;
+    }
     notifyListeners();
   }
 
@@ -102,7 +141,7 @@ class UpdateController extends ChangeNotifier {
     return true;
   }
 
-  /// 稍后：关掉卡片，本会话不再弹（红点仍在）。
+  /// 稍后：关掉卡片。available 回 idle；ready 保持就绪（红点保留，入口行可再进）。
   void dismiss() {
     if (phase == UpdatePhase.available) {
       phase = UpdatePhase.idle;
@@ -110,16 +149,22 @@ class UpdateController extends ChangeNotifier {
     }
   }
 
-  /// 跳过此版本：除非出现更高版本号，否则不再提示。
+  /// 跳过此版本：除非出现更高版本号，否则不再提示；本地已就绪的包一并清掉。
   Future<void> skipVersion() async {
     final vc = info?.versionCode ?? 0;
-    if (vc > 0) await service.ignoreVersion(vc);
+    if (vc > 0) {
+      await service.ignoreVersion(vc);
+      if (_readyVc == vc) {
+        await service.discardReady();
+        _readyVc = 0;
+      }
+    }
     phase = UpdatePhase.idle;
     notifyListeners();
   }
 
-  /// 下载 → 校验 → 唤起安装器。未知来源未授权时先引导用户去系统设置。
-  Future<void> downloadAndInstall() async {
+  /// 静默后台下载：成功 → 就绪；失败静默回退 available（红点保留），不打扰用户。
+  Future<void> backgroundDownload() async {
     final target = info;
     if (target == null) return;
     if (phase == UpdatePhase.downloading || phase == UpdatePhase.verifying) return;
@@ -129,7 +174,7 @@ class UpdateController extends ChangeNotifier {
     total = target.size;
     notifyListeners();
     try {
-      final file = await service.download(
+      await service.download(
         target,
         onProgress: (got, sum) {
           received = got;
@@ -137,25 +182,41 @@ class UpdateController extends ChangeNotifier {
           notifyListeners();
         },
       );
+      _readyVc = target.versionCode;
+      phase = UpdatePhase.ready;
+    } catch (_) {
+      phase = UpdatePhase.available; // 静默失败：回到手动模式，等下次启动断点续传
+    }
+    notifyListeners();
+  }
+
+  /// 手动「立即更新」：就绪包直接装；否则下载（自动断点续传）→ 校验 → 唤起安装器。
+  Future<void> downloadAndInstall() async {
+    if (phase == UpdatePhase.ready) {
+      await installReady();
+      return;
+    }
+    final target = info;
+    if (target == null) return;
+    if (phase == UpdatePhase.downloading || phase == UpdatePhase.verifying) return;
+    phase = UpdatePhase.downloading;
+    error = null;
+    received = 0;
+    total = target.size;
+    notifyListeners();
+    try {
+      await service.download(
+        target,
+        onProgress: (got, sum) {
+          received = got;
+          total = sum;
+          notifyListeners();
+        },
+      );
+      _readyVc = target.versionCode;
       phase = UpdatePhase.verifying;
       notifyListeners();
-      if (!await service.canInstallPackages()) {
-        final granted = await service.requestInstallPermission();
-        if (!granted) {
-          phase = UpdatePhase.failed;
-          error = '需要在系统设置里允许本应用「安装未知应用」';
-          notifyListeners();
-          return;
-        }
-      }
-      final err = await service.install(file);
-      if (err != null) {
-        phase = UpdatePhase.failed;
-        error = err;
-      } else {
-        phase = UpdatePhase.installing;
-      }
-      notifyListeners();
+      await installReady();
     } on UpdateChecksumException {
       phase = UpdatePhase.failed;
       error = '安装包校验未通过，已丢弃（可换个线路重试）';
@@ -165,5 +226,36 @@ class UpdateController extends ChangeNotifier {
       error = '下载失败：$e';
       notifyListeners();
     }
+  }
+
+  /// 安装已就绪的包：未知来源未授权时先引导用户去系统设置。
+  Future<void> installReady() async {
+    if (phase == UpdatePhase.installing) return;
+    final ready = await service.readyFile();
+    if (ready == null) {
+      phase = UpdatePhase.failed;
+      error = '安装包不存在，请重新下载';
+      notifyListeners();
+      return;
+    }
+    phase = UpdatePhase.verifying;
+    notifyListeners();
+    if (!await service.canInstallPackages()) {
+      final granted = await service.requestInstallPermission();
+      if (!granted) {
+        phase = UpdatePhase.failed;
+        error = '需要在系统设置里允许本应用「安装未知应用」';
+        notifyListeners();
+        return;
+      }
+    }
+    final err = await service.install(ready.file);
+    if (err != null) {
+      phase = UpdatePhase.failed;
+      error = err;
+    } else {
+      phase = UpdatePhase.installing;
+    }
+    notifyListeners();
   }
 }

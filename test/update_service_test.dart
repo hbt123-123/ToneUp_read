@@ -166,37 +166,164 @@ void main() {
     final apk = utf8.encode('fake apk bytes');
     final good = sha256.convert(apk).toString();
 
-    test('sha256 一致才返回文件', () async {
+    UpdateInfo _info({String? sha, int? size, int vc = 360}) => UpdateInfo(
+          version: '3.6.0',
+          versionCode: vc,
+          url: _apkUrl,
+          sha256: sha ?? good,
+          size: size ?? apk.length,
+          notes: '',
+        );
+
+    File partFile(int vc) => File('${tmp.path}/update/$vc.apk.part');
+    File apkFile(int vc) => File('${tmp.path}/update/$vc.apk');
+
+    test('sha256 一致才转正为 <vc>.apk', () async {
       final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
         return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
       }));
-      final f = await s.download(UpdateInfo(
-        version: '3.6.0',
-        versionCode: 360,
-        url: _apkUrl,
-        sha256: good,
-        size: apk.length,
-        notes: '',
-      ));
+      final f = await s.download(_info());
       expect(await f.readAsBytes(), apk);
+      expect(f.path, endsWith('360.apk'), reason: '校验通过才从 part 转正');
+      expect(partFile(360).existsSync(), isFalse);
     });
 
     test('sha256 不匹配：删文件 + 抛异常（绝不交给安装器）', () async {
       final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
         return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
       }));
-      await expectLater(
-        s.download(UpdateInfo(
+      await expectLater(s.download(_info(sha: 'f' * 64)), throwsA(isA<UpdateChecksumException>()));
+      expect(apkFile(360).existsSync(), isFalse, reason: '坏包必须删掉');
+      expect(partFile(360).existsSync(), isFalse);
+      final dir = Directory('${tmp.path}/update');
+      expect(dir.listSync(), isEmpty, reason: '不留任何半成品');
+    });
+
+    test('已就绪的包跨会话复用，不再发请求', () async {
+      final dir = Directory('${tmp.path}/update');
+      dir.createSync(recursive: true);
+      await apkFile(360).writeAsBytes(apk);
+      var hits = 0;
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        hits++;
+        return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
+      }));
+      final progress = <int>[];
+      final f = await s.download(_info(), onProgress: (got, total) => progress.add(got));
+      expect(hits, 0, reason: '就绪包直接复用');
+      expect(await f.readAsBytes(), apk);
+      expect(progress, [apk.length], reason: '复用时报告一次完成进度');
+    });
+  });
+
+  group('断点续传', () {
+    final apk = utf8.encode('0123456789abcdef'); // 16 字节，前 10 + 后 6 两段
+    final good = sha256.convert(apk).toString();
+
+    UpdateInfo _info({int vc = 360}) => UpdateInfo(
           version: '3.6.0',
-          versionCode: 360,
+          versionCode: vc,
           url: _apkUrl,
-          sha256: 'f' * 64,
+          sha256: good,
           size: apk.length,
           notes: '',
-        )),
-        throwsA(isA<UpdateChecksumException>()),
-      );
-      expect(File('${tmp.path}/ToneUP-read.apk').existsSync(), isFalse, reason: '坏包必须删掉');
+        );
+
+    Future<void> seedPart(int vc, List<int> bytes) async {
+      final dir = Directory('${tmp.path}/update');
+      dir.createSync(recursive: true);
+      await File('${dir.path}/$vc.apk.part').writeAsBytes(bytes);
+    }
+
+    test('part 存在：带 Range 头，206 响应追加拼接', () async {
+      await seedPart(360, apk.sublist(0, 10));
+      final ranges = <String?>[];
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        ranges.add(req.headers['range']);
+        return http.StreamedResponse(Stream.value(apk.sublist(10)), 206, contentLength: apk.length - 10);
+      }));
+      final f = await s.download(_info());
+      expect(ranges, ['bytes=10-'], reason: '从 part 长度处续传');
+      expect(await f.readAsBytes(), apk);
+      expect(f.path, endsWith('360.apk'));
+    });
+
+    test('端点不支持 Range（回 200 全量）：丢旧 part 重头下，结果仍正确', () async {
+      await seedPart(360, apk.sublist(0, 10));
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
+      }));
+      final f = await s.download(_info());
+      expect(await f.readAsBytes(), apk, reason: '200 视为不支持续传，全量重下');
+      expect(f.readAsBytesSync().length, apk.length, reason: '不能把旧 part 拼在新全量后面');
+    });
+
+    test('流被提前掐断：换端点从断点接着下', () async {
+      final ranges = <String?>[];
+      var call = 0;
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        ranges.add(req.headers['range']);
+        call++;
+        if (call == 1) {
+          // 直连：声明 16 字节但只给 10 个就正常收尾（模拟被掐断）
+          return http.StreamedResponse(Stream.value(apk.sublist(0, 10)), 200, contentLength: apk.length);
+        }
+        // 镜像：从断点续上
+        return http.StreamedResponse(Stream.value(apk.sublist(10)), 206, contentLength: apk.length - 10);
+      }));
+      final f = await s.download(_info());
+      expect(ranges, [isNull, 'bytes=10-'], reason: '第一次无 part，第二次从断点续传');
+      expect(await f.readAsBytes(), apk);
+    });
+
+    test('版本隔离：不同 versionCode 各自维护 part', () async {
+      await seedPart(360, apk.sublist(0, 10));
+      final ranges = <String?>[];
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        ranges.add(req.headers['range']);
+        return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
+      }));
+      await s.download(_info(vc: 361));
+      expect(ranges, [isNull], reason: '361 没有自己的 part，不带 Range，不沾 360 的断点');
+      expect(File('${tmp.path}/update/360.apk.part').existsSync(), isTrue, reason: '360 的 part 不被动');
+      expect(File('${tmp.path}/update/361.apk').existsSync(), isTrue);
+    });
+
+    test('part 比预期还长：视为脏数据重头下', () async {
+      await seedPart(360, [...apk, ...apk]);
+      final ranges = <String?>[];
+      final s = UpdateService(client: MockClient.streaming((req, bodyStream) async {
+        ranges.add(req.headers['range']);
+        return http.StreamedResponse(Stream.value(apk), 200, contentLength: apk.length);
+      }));
+      final f = await s.download(_info());
+      expect(ranges, [isNull], reason: '脏 part 已删，从头下不带 Range');
+      expect(await f.readAsBytes(), apk);
+    });
+  });
+
+  group('本地更新包状态', () {
+    test('readyFile 取 versionCode 最大且高于已安装的就绪包，忽略 part', () async {
+      final dir = Directory('${tmp.path}/update');
+      dir.createSync(recursive: true);
+      await File('${dir.path}/350.apk').writeAsBytes([1]);
+      await File('${dir.path}/360.apk').writeAsBytes([2]);
+      await File('${dir.path}/370.apk.part').writeAsBytes([3]);
+      final s = UpdateService(client: MockClient((req) async => http.Response('', 404)));
+      final ready = await s.readyFile();
+      expect(ready, isNotNull);
+      expect(ready!.vc, 360, reason: '370 只有 part，不算就绪；350/360 里取最大');
+    });
+
+    test('discardReady 只清成品，保留续传进度的 part', () async {
+      final dir = Directory('${tmp.path}/update');
+      dir.createSync(recursive: true);
+      await File('${dir.path}/350.apk').writeAsBytes([1]);
+      await File('${dir.path}/360.apk.part').writeAsBytes([2]);
+      final s = UpdateService(client: MockClient((req) async => http.Response('', 404)));
+      await s.discardReady();
+      expect(File('${dir.path}/350.apk').existsSync(), isFalse);
+      expect(File('${dir.path}/360.apk.part').existsSync(), isTrue, reason: 'part 是续传进度，不随成品清');
     });
   });
 }

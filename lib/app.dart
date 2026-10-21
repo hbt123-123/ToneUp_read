@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/theme/app_theme.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 import 'package:toneup_read/providers/providers.dart';
+import 'package:toneup_read/services/update_controller.dart';
 import 'package:toneup_read/widgets/bottom_nav.dart';
+import 'package:toneup_read/widgets/go_update_sheet.dart';
 import 'package:toneup_read/screens/home_screen.dart';
 import 'package:toneup_read/screens/vocab_screen.dart';
 import 'package:toneup_read/screens/sentence_screen.dart';
@@ -35,13 +37,54 @@ class _MyAppState extends ConsumerState<MyApp> {
       theme: buildLightTheme(),
       darkTheme: buildDarkTheme(),
       themeMode: dark ? ThemeMode.dark : ThemeMode.light,
-      home: Scaffold(
-        body: GoBackdrop(child: IndexedStack(index: index, children: _tabs)),
-        bottomNavigationBar: BottomNav(currentIndex: index, onTap: (i) => ref.read(tabIndexProvider.notifier).set(i)),
+      // 更新观察者必须挂在 home 之下（Navigator 之内），弹更新面板才找得到 Navigator
+      home: _UpdateReadyWatcher(
+        child: Scaffold(
+          body: GoBackdrop(child: IndexedStack(index: index, children: _tabs)),
+          bottomNavigationBar: BottomNav(currentIndex: index, onTap: (i) => ref.read(tabIndexProvider.notifier).set(i)),
+        ),
       ),
       routes: {
         '/article': (c) => const ArticleScreen(),
       },
     );
   }
+}
+
+/// 应用内更新的启动观察者：打开 App 即静默检查（每天一次），发现新版自动后台
+/// 断点续传下载；包就绪后弹一次「立即安装」面板。测试环境 offline，全部空转。
+class _UpdateReadyWatcher extends ConsumerStatefulWidget {
+  final Widget child;
+  const _UpdateReadyWatcher({required this.child});
+
+  @override
+  ConsumerState<_UpdateReadyWatcher> createState() => _UpdateReadyWatcherState();
+}
+
+class _UpdateReadyWatcherState extends ConsumerState<_UpdateReadyWatcher> {
+  bool _prompted = false; // 每次启动最多提示一次，取消后靠「我的」入口行红点
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final c = ref.read(updateProvider);
+      await c.init();
+      if (!mounted) return;
+      c.addListener(_promptIfNeeded);
+      await c.autoCheck();
+      _promptIfNeeded();
+    });
+  }
+
+  void _promptIfNeeded() {
+    if (!mounted || _prompted) return;
+    final c = ref.read(updateProvider);
+    if (c.phase != UpdatePhase.ready) return;
+    _prompted = true;
+    showGoUpdateSheet(context, c);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

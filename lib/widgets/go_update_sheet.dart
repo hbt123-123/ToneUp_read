@@ -48,7 +48,10 @@ class _UpdateSheet extends StatelessWidget {
                     children: [
                       const GoIcon('bell', size: 18, color: Go.primary),
                       const SizedBox(width: Go.sp3),
-                      Text('发现新版本', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface)),
+                      Text(
+                        controller.phase == UpdatePhase.ready ? '新版本已就绪' : '发现新版本',
+                        style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface),
+                      ),
                       const Spacer(),
                       if (info != null)
                         Container(
@@ -68,6 +71,7 @@ class _UpdateSheet extends StatelessWidget {
                       UpdatePhase.latest => const _Status(key: ValueKey('latest'), icon: 'check', text: '已经是最新版本了'),
                       UpdatePhase.installing => const _Status(key: ValueKey('installing'), icon: 'check', text: '已交给系统安装器，按提示完成安装'),
                       UpdatePhase.downloading || UpdatePhase.verifying => _progressBlock(),
+                      UpdatePhase.ready => _readyBlock(context),
                       UpdatePhase.failed => _failedBlock(context),
                       _ => _availableBlock(context),
                     },
@@ -124,6 +128,38 @@ class _UpdateSheet extends StatelessWidget {
       ],
     );
   }
+
+  /// 就绪态：包已下载并校验完成，确认后拉起系统安装器（Android 无法绕过安装确认）。
+  Widget _readyBlock(BuildContext context) => Column(
+        key: const ValueKey('ready'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const GoIcon('check', size: 15, color: Go.primary),
+              const SizedBox(width: Go.sp3),
+              Expanded(
+                child: Text(
+                  '安装包已下载完成，确认后拉起系统安装',
+                  style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2, height: Go.lhSnug),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Go.sp6),
+          GoBtn(
+            label: '立即安装',
+            icon: const GoIcon('export', size: 16, color: Go.onPrimary),
+            block: true,
+            onTap: () {
+              Navigator.pop(context);
+              controller.installReady();
+            },
+          ),
+          const SizedBox(height: Go.sp3),
+          GoBtn(label: '稍后', kind: GoBtnKind.tonal, block: true, onTap: () => Navigator.pop(context)),
+        ],
+      );
 
   Widget _progressBlock() {
     final verifying = controller.phase == UpdatePhase.verifying;
