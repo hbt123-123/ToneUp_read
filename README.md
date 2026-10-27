@@ -7,11 +7,12 @@
 
 ## 下载与版本
 
-默认下载 **v0.3**：当前可用版本，文章接口与翻译网关的密钥已内置，装上即用；自带应用内自动更新。v0.1 是早期构建（未内置密钥，功能不可用），仅作历史归档。
+默认下载 **v1.0.4**：当前可用版本，文章接口与翻译网关的密钥已内置，装上即用；自带应用内自动更新。v0.1 是早期构建（未内置密钥，功能不可用），仅作历史归档。
 
 | 版本 | 状态 | 下载 |
 | --- | --- | --- |
-| **v0.3** | 当前版本，推荐 | [下载 APK](https://github.com/hbt123-123/ToneUp_read/releases/latest/download/ToneUP-read.apk) |
+| **v1.0.4** | 当前版本，推荐 | [下载 APK](https://github.com/hbt123-123/ToneUp_read/releases/latest/download/ToneUP-read.apk) |
+| v0.3 | 历史版本，建议升级 | [Release v0.3](https://github.com/hbt123-123/ToneUp_read/releases/tag/v0.3) |
 | v0.2 | 历史版本，建议升级 | [Release v0.2](https://github.com/hbt123-123/ToneUp_read/releases/tag/v0.2) |
 | v0.1 | 历史归档，功能不可用 | [Release v0.1](https://github.com/hbt123-123/ToneUp_read/releases/tag/v0.1) |
 
