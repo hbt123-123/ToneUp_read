@@ -1111,7 +1111,8 @@ class _ParaTextState extends State<_ParaText> {
   @override
   void initState() {
     super.initState();
-    _tap = TapGestureRecognizer()..onTapDown = (d) => _hit(d.globalPosition, false);
+    // 用 onTapUp 而非 onTapDown：按下即触发会抢走长按手势，导致长按无法选中正文。
+    _tap = TapGestureRecognizer()..onTapUp = (d) => _hit(d.globalPosition, false);
     widget.selVer.addListener(_onSelChanged);
     _mine = _slice();
   }
