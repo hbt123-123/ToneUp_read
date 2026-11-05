@@ -19,7 +19,6 @@ val keystoreProperties = Properties().apply { load(FileInputStream(keystorePrope
 android {
     namespace = "top.toneup.read"
     compileSdk = flutter.compileSdkVersion
-    ndkPath = "D:/OI/Android/ndk/28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
