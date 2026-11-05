@@ -29,13 +29,12 @@ jobs:
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ARTICLE_API_KEY: ${{ secrets.ARTICLE_API_KEY }}
           GATEWAY_KEY: ${{ secrets.GATEWAY_KEY }}
         run: |
           missing=""
-          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD ANDROID_KEY_ALIAS ARTICLE_API_KEY GATEWAY_KEY; do
+          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ARTICLE_API_KEY GATEWAY_KEY; do
             if [ -z "${!name}" ]; then
               missing="$missing $name"
             fi
@@ -156,13 +155,31 @@ jobs:
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          # 该签名库为 PKCS12，密钥口令与库口令相同，因此统一使用库口令。
+          # 同时去掉复制时可能带入的首尾空白/换行，避免 keytool 读取失败。
+          STORE_PASSWORD="$(printf '%s' "$ANDROID_KEYSTORE_PASSWORD" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          KEY_ALIAS="$(printf '%s' "$ANDROID_KEY_ALIAS" | tr -d '[:space:]')"
           printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=toneup-release.jks\n' \
-            "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_PASSWORD" "$ANDROID_KEY_ALIAS" > android/key.properties
-          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > android/app/toneup-release.jks
+            "$STORE_PASSWORD" "$STORE_PASSWORD" "$KEY_ALIAS" > android/key.properties
+          echo "$ANDROID_KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > android/app/toneup-release.jks
           test -s android/app/toneup-release.jks
+
+          echo "Keystore bytes: $(stat -c %s android/app/toneup-release.jks)（正确值应为 4376）"
+          keytool -list -keystore android/app/toneup-release.jks -storepass "$STORE_PASSWORD" | sed -n '1,8p'
+
+          # 构建前验证别名和口令，失败时立即报错，不必等 Gradle 跑完。
+          keytool -importkeystore \
+            -srckeystore android/app/toneup-release.jks \
+            -srcstorepass "$STORE_PASSWORD" \
+            -srcalias "$KEY_ALIAS" \
+            -srckeypass "$STORE_PASSWORD" \
+            -destkeystore /tmp/keystore-preflight.p12 \
+            -deststoretype PKCS12 \
+            -deststorepass preflight \
+            -destkeypass preflight \
+            -noprompt
 
       - name: Test and build APK
         if: steps.detect.outputs.changed == 'true'
