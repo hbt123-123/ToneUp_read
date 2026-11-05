@@ -167,6 +167,11 @@ jobs:
           test -s android/app/toneup-release.jks
 
           echo "Keystore bytes: $(stat -c %s android/app/toneup-release.jks)（正确值应为 4376）"
+          ACTUAL_BYTES=$(stat -c %s android/app/toneup-release.jks)
+          if [ "$ACTUAL_BYTES" -ne 4376 ]; then
+            echo "::error::ANDROID_KEYSTORE_B64 不完整：解码后 ${ACTUAL_BYTES} 字节，应为 4376 字节（请重新完整粘贴单行 Base64）"
+            exit 1
+          fi
           keytool -list -keystore android/app/toneup-release.jks -storepass "$STORE_PASSWORD" | sed -n '1,8p'
 
           # 构建前验证别名和口令，失败时立即报错，不必等 Gradle 跑完。
