@@ -20,7 +20,9 @@ final dbProvider = Provider((ref) => DbService());
 final httpProvider = Provider((ref) => HttpService());
 final appConfigProvider = ChangeNotifierProvider<AppConfigService>((ref) => AppConfigService());
 final llmProvider = Provider((ref) => LlmService(ref.watch(httpProvider), ref.read(appConfigProvider)));
-final ttsProvider = Provider((ref) => TtsService());
+/// 朗读：Edge TTS 客户端直连（无密钥/无网关），失败回落本机 flutter_tts。语音/语速在朗读时现读配置，
+/// 所以这里用 `read`（watch 会随配置 notify 重建服务并丢掉正在播的播放器）。
+final ttsProvider = Provider((ref) => TtsService(ref.read(appConfigProvider)));
 final translateProvider = Provider((ref) => TranslateService(ref.watch(llmProvider)));
 final vocabProvider = Provider((ref) => VocabService(ref.watch(dbProvider), ref.watch(llmProvider)));
 final updateServiceProvider = Provider((ref) => UpdateService());

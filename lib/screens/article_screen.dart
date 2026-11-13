@@ -9,6 +9,7 @@ import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/services/tts_service.dart';
+import 'package:toneup_read/services/tts_voices.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -40,6 +41,19 @@ class _Tok {
   final bool word;
   const _Tok(this.text, this.word);
 }
+
+/// 一句朗读单元：文本 + 在原文里的位置（段落下标 + token 闭区间）。
+/// 高亮时不重新分句，直接用 [tiStart]..[tiEnd] 给 token 上色。
+class _TtsSeg {
+  final String text;
+  final int pi;
+  final int tiStart;
+  final int tiEnd; // 含
+  const _TtsSeg(this.text, this.pi, this.tiStart, this.tiEnd);
+}
+
+/// 语速档位：与 AppConfigService.setTts 的 clamp(0.7, 1.3) 对齐。
+const List<double> _ttsSpeeds = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3];
 
 class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   List<ArticleBlock> _blocks = [];
@@ -77,7 +91,23 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   List<List<int>> _paraStarts = const [];
 
   bool _ttsPlaying = false;
+
+  /// 「正在生成语音…」：只表示在等第一段 Edge 合成音频就绪，由 playing 变 true 或失败收掉。
   bool _ttsSynthesizing = false;
+
+  /// 全文朗读模式（跟读高亮 + 底部状态胶囊）。选区朗读/词卡试听不进入该模式。
+  bool _ttsArticle = false;
+
+  /// 全文朗读句表：按段落切句，记录每句的 token 区间供跟读高亮回映。
+  /// 播放期间保持身份稳定（_ParaText 靠 identical 判断）。
+  List<_TtsSeg> _segs = const [];
+
+  /// 当前朗读句下标（-1 空闲）：段落级听众各自过滤，避免整页重建。
+  final ValueNotifier<int> _ttsSegVer = ValueNotifier<int>(-1);
+
+  /// 跟读滚动：只在「段落变了 + 不在视口 + 用户没在拖 + 不是首句」时才 ensureVisible。
+  int _ttsPara = -1;
+  bool _ttsFollowArmed = false;
 
   int _flashPara = -1;
   int _flashTok = -1;
@@ -101,21 +131,70 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     _load();
     _tts = ref.read(ttsProvider);
     _tts.playing.addListener(_onTtsChanged);
+    _tts.segment.addListener(_onTtsSegment);
   }
 
   void _onTtsChanged() {
     if (!mounted) return;
+    final playing = _tts.isPlaying;
     setState(() {
-      _ttsPlaying = ref.read(ttsProvider).isPlaying;
-      if (!_ttsPlaying) _ttsSynthesizing = false;
+      _ttsPlaying = playing;
+      if (playing) {
+        _ttsSynthesizing = false; // 第一段已开播，收掉「生成中」
+      } else if (!_ttsSynthesizing) {
+        // 自然播完或外部停止。注意 speakSegments 启动时会先内部 stop() 一次
+        //（playing=false 前奏），那一下 _ttsSynthesizing 还是 true，不能在此清全文模式。
+        _ttsArticle = false;
+        _ttsPara = -1;
+        _ttsFollowArmed = false;
+      }
     });
+    if (!playing) _ttsSegVer.value = -1;
+  }
+
+  /// 句号变化：只 bump 一个版本号让相关段落自行重建，整页不重建；
+  /// 同时在「段落切换且不在视口」时做一次温和的自动滚动。
+  void _onTtsSegment() {
+    final idx = _tts.segment.value;
+    // 只有全文朗读的句表才驱动高亮：选区朗读/音色试听的 segment 下标
+    // 指向的是别的句表，直接拿来上色会错位。
+    final forArticle = _ttsArticle && idx >= 0 && idx < _segs.length;
+    _ttsSegVer.value = forArticle ? idx : -1;
+    if (!forArticle) return;
+    final pi = _segs[idx].pi;
+    // 首句不滚动（用户刚点朗读，视口通常已在开头）；同段内换句不滚。
+    if (!_ttsFollowArmed) {
+      _ttsFollowArmed = true;
+      _ttsPara = pi;
+      return;
+    }
+    if (pi == _ttsPara) return;
+    _ttsPara = pi;
+    // 用户正在拖动时绝不抢滚动。
+    if (_scrollCtrl.hasClients && _scrollCtrl.position.isScrollingNotifier.value) return;
+    final ctx = _paraKeys[pi]?.currentContext;
+    if (ctx == null) return;
+    final paraRo = ctx.findRenderObject();
+    if (paraRo is! RenderBox || !paraRo.hasSize) return;
+    final state = Scrollable.maybeOf(ctx);
+    final vpRo = state?.context.findRenderObject();
+    if (vpRo is! RenderBox || !vpRo.hasSize) return;
+    final paraRect = paraRo.localToGlobal(Offset.zero) & paraRo.size;
+    final vpRect = vpRo.localToGlobal(Offset.zero) & vpRo.size;
+    // 已有交集（哪怕只露一点）就不滚，避免和用户的手打架。
+    final grace = 8.0;
+    final visible = paraRect.bottom > vpRect.top + grace && paraRect.top < vpRect.bottom - grace;
+    if (visible) return;
+    Scrollable.ensureVisible(ctx, alignment: 0.25, duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
   }
 
   @override
   void dispose() {
     // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行）
     _tts.playing.removeListener(_onTtsChanged);
+    _tts.segment.removeListener(_onTtsSegment);
     _tts.stop();
+    _ttsSegVer.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -221,7 +300,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     for (final m in _reToken.allMatches(s)) {
       var t = m.group(0)!;
       if (_reSpaceOnly.hasMatch(t)) {
-        t = t.replaceAll(_reNonNewline, '\u00A0');
+        // 空白统一换成普通空格（1:1 替换，token 长度与原文对齐，偏移/二分/选区都依赖这一点）。
+        // 不能用 U+00A0：那是旧 uni-app `<view>` inline-block 布局的占位手段，
+        // 在 Flutter 里 NBSP 不可断行，整段只剩零个换行机会，ICU 只能从单词中间断（"Mada M/asr"）。
+        t = t.replaceAll(_reNonNewline, ' ');
       }
       out.add(_Tok(t, _reWordOnly.hasMatch(t)));
     }
@@ -337,6 +419,14 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         tokIndex: tokIndex,
         onClose: () => Navigator.pop(c),
         onSpeak: (w) async {
+          // 与 _readText 同款清理：词卡朗读不进全文跟读模式。
+          // 若正卡在「首段生成中」点词试听，stop 前奏会被 _ttsSynthesizing 门挡住，
+          // 不主动清会把词的 segment(0) 误映射到句表第 0 句上色；
+          // speak 内部 stop() 会换掉 gen，原文那条链已经废了，「生成中」一并收掉防胶囊卡死。
+          _ttsArticle = false;
+          _ttsSynthesizing = false;
+          _segs = const [];
+          _ttsSegVer.value = -1;
           try {
             await ref.read(ttsProvider).speak(w);
           } catch (e) {
@@ -406,22 +496,16 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   // ================= 朗读 =================
   Future<void> _readText(String text) async {
     if (text.trim().isEmpty) return;
+    // 选区/词卡朗读不进入全文跟读模式：清掉高亮与句表，避免 segment 下标错位上色。
+    _ttsArticle = false;
+    _ttsSynthesizing = false;
+    _segs = const [];
+    _ttsSegVer.value = -1;
     await ref.read(ttsProvider).stop();
-    setState(() => _ttsSynthesizing = true);
     try {
       await ref.read(ttsProvider).speak(text);
-      if (mounted) {
-        setState(() {
-          _ttsSynthesizing = false;
-          _ttsPlaying = ref.read(ttsProvider).isPlaying;
-        });
-      }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _ttsSynthesizing = false;
-          _ttsPlaying = false;
-        });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('朗读失败：$e')));
       }
     }
@@ -434,13 +518,94 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         setState(() {
           _ttsPlaying = false;
           _ttsSynthesizing = false;
+          _ttsArticle = false; // 取消后残留 true 会让后续试听错点亮旧句表
         });
       }
       return;
     }
-    final full = _paragraphs.join('\n\n').trim();
-    if (full.isEmpty) return;
-    await _readText(full);
+    final segs = _buildSegs();
+    if (segs.isEmpty) return;
+    _clearSelection(); // 全文朗读时收起选区条，状态胶囊不与它叠在一起
+    setState(() {
+      _segs = segs;
+      _ttsArticle = true;
+      _ttsSynthesizing = true; // 等第一段音频；playing 变 true 时由监听收掉
+      _ttsPara = -1;
+      _ttsFollowArmed = false;
+    });
+    try {
+      await ref.read(ttsProvider).speakSegments([for (final s in segs) s.text]);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _ttsSynthesizing = false;
+          _ttsPlaying = false;
+          _ttsArticle = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('朗读失败：$e')));
+      }
+    }
+  }
+
+  /// 句末标点后的收尾引号/括号（与 TtsService._closers 对齐）。
+  /// 非 raw 字符串：`\'`/`\\` 是普通 Dart 转义，`'` 不会提前掐断字符串。
+  static final _reClosersOnly = RegExp('^["\'”’)\\]]+$');
+
+  /// 把当前正文切成句表：逐段扫 token，句末判定与 TtsService.splitSentences 同规则——
+  /// token 里出现 .!?（其后只允许收尾符号），且下一个 token 是空白或段落结束。
+  /// 不在这里做 >600 字的长句二切：TtsService 内部会切且仍报原句下标，高亮不会错位。
+  List<_TtsSeg> _buildSegs() {
+    _syncToks();
+    final out = <_TtsSeg>[];
+    final paras = _paragraphs;
+    for (var pi = 0; pi < paras.length; pi++) {
+      final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
+      if (toks.isEmpty) continue;
+      var start = 0;
+      for (var ti = 0; ti < toks.length; ti++) {
+        final end = _segEndAt(toks, ti);
+        if (end < 0) continue;
+        final text = _segText(toks, start, end);
+        if (text.isNotEmpty) out.add(_TtsSeg(text, pi, start, end));
+        start = end + 1;
+        ti = end;
+      }
+      // 段尾没有句末标点的残句（"To be continued"）单独成句。
+      if (start < toks.length) {
+        final text = _segText(toks, start, toks.length - 1);
+        if (text.isNotEmpty) out.add(_TtsSeg(text, pi, start, toks.length - 1));
+      }
+    }
+    return out;
+  }
+
+  /// token [ti] 是否为句末：是则返回其下标，否则 -1。
+  /// 标点串（`."`、`...`、`).`）在分词里是一个 token，按**最后一个** .!? 判断，
+  /// 其后只允许收尾引号/括号——这样 `3.5`、`e.g` 这类内部点号不会误切。
+  int _segEndAt(List<_Tok> toks, int ti) {
+    final t = toks[ti].text;
+    var p = -1;
+    for (var i = t.length - 1; i >= 0; i--) {
+      if ('.!?。！？'.contains(t[i])) {
+        p = i;
+        break;
+      }
+    }
+    if (p < 0) return -1;
+    final rest = t.substring(p + 1);
+    if (rest.isNotEmpty && !_reClosersOnly.hasMatch(rest)) return -1;
+    if (ti + 1 >= toks.length) return ti; // 段落结束
+    if (_reSpaceOnly.hasMatch(toks[ti + 1].text)) return ti; // 后随空白
+    return -1;
+  }
+
+  /// token [from]..[to] 拼成句文本：保留内部空白（TTS 需要正常间距），仅 trim 两端。
+  static String _segText(List<_Tok> toks, int from, int to) {
+    final buf = StringBuffer();
+    for (var k = from; k <= to && k < toks.length; k++) {
+      buf.write(toks[k].text);
+    }
+    return buf.toString().trim();
   }
 
   Future<void> _readSelection() async {
@@ -577,40 +742,58 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   @override
   Widget build(BuildContext context) {
     final cfg = ref.watch(appConfigProvider);
-    return GoPage(
-      topPad: false,
-      child: Stack(
-        children: [
-          Column(
-            children: [
-              _appbar(),
-              if (_selectMode)
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
-                  padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
-                  decoration: BoxDecoration(color: Go.onSurface.withValues(alpha: 0.88), borderRadius: BorderRadius.circular(Go.rMd)),
-                  child: const Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
-                      textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: Go.bg, height: Go.lhSnug)),
-                ),
-              if (_showSettings) _settings(cfg),
-              Expanded(child: _body()),
-            ],
-          ),
-          ValueListenableBuilder<int>(
-            valueListenable: _selVer,
-            builder: (_, _, _) => (_selText.isNotEmpty || _selectedText.isNotEmpty) ? _selBar() : const SizedBox(),
-          ),
-          if (_ttsSynthesizing) _ttsMask(),
-        ],
+    final pal = GoReader.of(cfg.readerTheme);
+    // 状态栏图标：夜读配浅色、纸色配深色（AnnotatedRegion 只作用于本页）。
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: pal.isNight ? Brightness.light : Brightness.dark,
+        statusBarBrightness: pal.isNight ? Brightness.dark : Brightness.light,
+      ),
+      child: GoPage(
+        surface: pal.bg,
+        topPad: false,
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                _appbar(pal),
+                if (_selectMode)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
+                    padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
+                    decoration: BoxDecoration(
+                      color: pal.surface,
+                      borderRadius: BorderRadius.circular(Go.rMd),
+                      border: Border.all(color: pal.accent.withValues(alpha: 0.45), width: 0.8),
+                    ),
+                    child: Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
+                        textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, height: Go.lhSnug, color: pal.secondary)),
+                  ),
+                if (_showSettings) _settings(cfg, pal),
+                Expanded(child: _body(pal)),
+              ],
+            ),
+            ValueListenableBuilder<int>(
+              valueListenable: _selVer,
+              builder: (_, _, _) => (_selText.isNotEmpty || _selectedText.isNotEmpty) ? _selBar(pal) : const SizedBox(),
+            ),
+            if (_ttsSynthesizing || (_ttsPlaying && _ttsArticle)) _ttsPill(pal),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _appbar() {
+  Widget _appbar(GoReaderPalette pal) {
     return GoAppBar(
       title: _title.isNotEmpty ? _title : '文章阅读',
       style: GoAppBarStyle.floating,
-      leading: GoBack(onTap: () => Navigator.of(context).maybePop()),
+      surface: pal.surface,
+      titleColor: pal.ink,
+      borderColor: pal.divider,
+      shadow: const [], // 无投影：融入阅读面，滚动时不出现硬边
+      leading: GoBack(onTap: () => Navigator.of(context).maybePop(), surface: pal.card, iconColor: pal.ink),
       actions: [
         GoIconBtn(icon: 'menu', onTap: () => setState(() {
           _selectMode = !_selectMode;
@@ -618,61 +801,99 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             _sel.clear();
             _selVer.value++;
           }
-        }), color: _selectMode ? Go.primary : null),
-        GoIconBtn(icon: _ttsPlaying ? 'stop' : 'tts', onTap: _toggleReadAloud, color: _ttsPlaying ? Go.primary : null),
-        GoIconBtn(icon: 'sparkle', onTap: _onCurateTap, color: _useCurated ? Go.primary : null),
-        GoIconBtn(icon: 'settings', onTap: () => setState(() => _showSettings = !_showSettings), color: _showSettings ? Go.primary : null),
+        }), color: _selectMode ? pal.accent : pal.secondary),
+        GoIconBtn(icon: (_ttsPlaying || _ttsSynthesizing) ? 'stop' : 'tts', onTap: _toggleReadAloud, color: (_ttsPlaying || _ttsSynthesizing) ? pal.accent : pal.secondary),
+        GoIconBtn(icon: 'sparkle', onTap: _onCurateTap, color: _useCurated ? pal.accent : pal.secondary),
+        GoIconBtn(icon: 'settings', onTap: () => setState(() => _showSettings = !_showSettings), color: _showSettings ? pal.accent : pal.secondary),
       ],
     );
   }
 
-  Widget _settings(dynamic cfg) {
+  Widget _settings(dynamic cfg, GoReaderPalette pal) {
     return Container(
-      decoration: const BoxDecoration(color: Go.surfaceRaised, border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+      decoration: BoxDecoration(color: pal.surface, border: Border(bottom: BorderSide(color: pal.divider, width: 0.5))),
       padding: const EdgeInsets.symmetric(vertical: Go.sp2),
       child: Column(
         children: [
+          _setRow('阅读外观', Row(mainAxisSize: MainAxisSize.min, children: [
+            _themeChip('夜读', cfg.readerTheme != 'paper', pal, () => ref.read(appConfigProvider).setReader(theme: 'night')),
+            const SizedBox(width: Go.sp3),
+            _themeChip('纸色', cfg.readerTheme == 'paper', pal, () => ref.read(appConfigProvider).setReader(theme: 'paper')),
+          ]), pal),
           _setRow('字号', Row(mainAxisSize: MainAxisSize.min, children: [
-            _step('A−', () => _changeFont(-1)),
-            SizedBox(width: Go.r(80), child: Text('${cfg.fontSize.toStringAsFixed(0)}', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
-            _step('A＋', () => _changeFont(1)),
-          ])),
+            _step('A−', () => _changeFont(-1), pal),
+            SizedBox(width: Go.r(80), child: Text(cfg.fontSize.toStringAsFixed(0), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
+            _step('A＋', () => _changeFont(1), pal),
+          ]), pal),
           _setRow('行距', Row(mainAxisSize: MainAxisSize.min, children: [
-            _step('−', () => _changeLine(-0.1)),
-            SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
-            _step('＋', () => _changeLine(0.1)),
-          ])),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
-            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词查询或翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
+            _step('−', () => _changeLine(-0.1), pal),
+            SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
+            _step('＋', () => _changeLine(0.1), pal),
+          ]), pal),
+          _setRow('朗读音色', GestureDetector(
+            onTap: _openVoiceSheet,
+            behavior: HitTestBehavior.opaque,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(_voiceLabel(cfg.ttsVoice), style: TextStyle(fontSize: Go.fsBodySm, color: pal.ink)),
+              const SizedBox(width: Go.sp1),
+              Icon(Icons.chevron_right, size: 18, color: pal.meta),
+            ]),
+          ), pal),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
+            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词查询或翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: pal.meta))),
           ),
         ],
       ),
     );
   }
 
-  Widget _setRow(String label, Widget child) => Container(
+  /// 夜读/纸色切换胶囊：选中项带对勾 + 强调色描边，未选中项融入面板。
+  Widget _themeChip(String label, bool on, GoReaderPalette pal, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
+          decoration: BoxDecoration(
+            color: on ? pal.accent.withValues(alpha: pal.isNight ? 0.18 : 0.12) : pal.card,
+            borderRadius: BorderRadius.circular(Go.rFull),
+            border: Border.all(color: on ? pal.accent : pal.divider, width: on ? 1 : 0.5),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (on) ...[
+              Icon(Icons.check, size: 14, color: pal.accent),
+              const SizedBox(width: Go.sp1),
+            ],
+            Text(label, style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: on ? pal.accent : pal.meta)),
+          ]),
+        ),
+      );
+
+  Widget _setRow(String label, Widget child, GoReaderPalette pal) => Container(
         margin: const EdgeInsets.symmetric(horizontal: Go.sp6),
         padding: const EdgeInsets.symmetric(vertical: Go.sp4),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: pal.divider, width: 0.5))),
         child: Row(
           children: [
-            SizedBox(width: Go.r(96), child: Text(label, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
+            // minWidth 而非固定宽：「阅读外观」四个字比旧的 48dp 标签盒宽，固定宽会折行。
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: Go.r(96)),
+              child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, color: pal.ink)),
+            ),
             const Spacer(),
             child,
           ],
         ),
       );
 
-  Widget _step(String label, VoidCallback onTap) => GestureDetector(
+  Widget _step(String label, VoidCallback onTap, GoReaderPalette pal) => GestureDetector(
         onTap: onTap,
         child: Container(
           constraints: BoxConstraints(minWidth: Go.r(64)),
           height: Go.r(64),
           padding: const EdgeInsets.symmetric(horizontal: Go.sp2),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface)),
+          decoration: BoxDecoration(color: pal.card, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, color: pal.ink)),
         ),
       );
 
@@ -688,50 +909,76 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     await ref.read(appConfigProvider).setReader(lineHeight: v.clamp(1.2, 2.4));
   }
 
-  Widget _body() {
+  /// Edge 音色 → 中文标签（顺序即展示顺序，见 kEdgeVoices）。
+  static String _voiceLabel(String id) {
+    for (final v in kEdgeVoices) {
+      if (v[0] == id) return v[1];
+    }
+    return id;
+  }
+
+  void _openVoiceSheet() {
+    // 试听会顶掉正在进行的全文朗读：先停掉阅读器侧状态，避免胶囊和高亮残留。
+    if (_ttsPlaying || _ttsSynthesizing) {
+      _tts.stop();
+      setState(() {
+        _ttsPlaying = false;
+        _ttsSynthesizing = false;
+        _ttsArticle = false;
+      });
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _VoiceSheet(),
+    );
+  }
+
+  Widget _body(GoReaderPalette pal) {
     if (_loading) {
-      return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp6), Text('正文加载中…', style: TextStyle(color: Go.onSurface3, fontSize: Go.fsBodySm))]));
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const PolySpinner(), const SizedBox(height: Go.sp6), Text('正文加载中…', style: TextStyle(color: pal.secondary, fontSize: Go.fsBodySm))]));
     }
     if (_error.isNotEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(_error, style: const TextStyle(color: Go.danger)),
+          Text(_error, style: TextStyle(color: pal.danger)),
           const SizedBox(height: Go.sp3),
-          GestureDetector(onTap: _load, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+          GestureDetector(onTap: _load, child: Text('重试', style: TextStyle(color: pal.accent, fontWeight: FontWeight.w600))),
         ]),
       );
     }
     // 正文未缓存（云端只缓存了元信息）：给占位块 + 打开原文。
-    if (_plain.trim().isEmpty) return _noBody();
-    return _reader();
+    if (_plain.trim().isEmpty) return _noBody(pal);
+    return _reader(pal);
   }
 
   /// 正文缺失时的占位：标题等元信息照常展示，正文区给说明与「打开原文」。
-  Widget _noBody() {
+  Widget _noBody(GoReaderPalette pal) {
     return SingleChildScrollView(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _cover(),
+          _cover(pal),
           Container(
             margin: const EdgeInsets.symmetric(horizontal: Go.sp6),
             padding: const EdgeInsets.all(Go.sp6),
-            decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+            decoration: BoxDecoration(color: pal.card, borderRadius: BorderRadius.circular(Go.rMd)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('正文未缓存', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                Text('正文未缓存', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: pal.ink)),
                 const SizedBox(height: Go.sp2),
-                const Text('这篇文章暂时没有缓存正文，可以打开原文阅读，或稍后重新进入本页加载。',
-                    style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: Go.lhRelaxed)),
+                Text('这篇文章暂时没有缓存正文，可以打开原文阅读，或稍后重新进入本页加载。',
+                    style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary, height: Go.lhRelaxed)),
                 if (_sourceUrl.isNotEmpty) ...[
                   const SizedBox(height: Go.sp5),
                   GestureDetector(
                     onTap: _openOriginal,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp3),
-                      decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+                      decoration: BoxDecoration(color: pal.accent, borderRadius: BorderRadius.circular(Go.rFull)),
                       child: const Text('打开原文', style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.onPrimary)),
                     ),
                   ),
@@ -760,7 +1007,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     }
   }
 
-  Widget _reader() {
+  Widget _reader(GoReaderPalette pal) {
     final cfg = ref.watch(appConfigProvider);
     final blocks = _activeBlocks;
     var paraIndex = -1;
@@ -769,41 +1016,51 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       final b = blocks[bi];
       if (b.type == 'p') {
         paraIndex++;
-        widgets.add(_paragraph(b.text ?? '', paraIndex));
+        widgets.add(_paragraph(b.text ?? '', paraIndex, pal));
       } else if (b.type == 'img' && !_imgErr.contains(bi)) {
-        widgets.add(_imageBlock(b, bi));
+        widgets.add(_imageBlock(b, bi, pal));
       }
     }
     return SingleChildScrollView(
       controller: _scrollCtrl,
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
+      // 末行不被手势区挡住：底部留 SafeArea + 一段余量。
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _cover(),
+          _cover(pal),
+          // 标题块与正文之间用一条短分隔线收住视线（纸色/夜读都适用）。
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(width: Go.sp12, height: 2, decoration: BoxDecoration(color: pal.accent, borderRadius: BorderRadius.circular(Go.rFull))),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp8, Go.sp6, 0),
             child: DefaultTextStyle(
-              style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
+              style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: pal.ink),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: Go.sp12),
-            child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Go.sp12),
+            child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: pal.meta, fontSize: Go.fsMeta, letterSpacing: 1)),
           ),
         ],
       ),
     );
   }
 
-  Widget _paragraph(String text, int pi) {
+  Widget _paragraph(String text, int pi, GoReaderPalette pal) {
     _syncToks();
     final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
     final starts = pi < _paraStarts.length ? _paraStarts[pi] : const <int>[];
     return Container(
       key: _paraKeys.putIfAbsent(pi, () => GlobalKey()),
-      margin: const EdgeInsets.only(bottom: Go.sp5),
+      // 段距从 10dp 加宽到 18dp：长文阅读的段落呼吸感。
+      margin: const EdgeInsets.only(bottom: 18),
       child: GestureDetector(
         onLongPress: () => _onParaLongPress(pi),
         child: _ParaText(
@@ -813,6 +1070,11 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           sel: _sel,
           selVer: _selVer,
           flashTok: _flashPara == pi ? _flashTok : -1,
+          selBg: pal.sel,
+          flashColor: pal.accent,
+          segs: _segs,
+          segVer: _ttsSegVer,
+          segBg: pal.accent.withValues(alpha: 0.14),
           onTok: (ti, isLong) {
             final tk = ti < toks.length ? toks[ti] : const _Tok('', false);
             _onTok(tk, isLong, text, pi, ti);
@@ -833,7 +1095,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     });
   }
 
-  Widget _cover() {
+  Widget _cover(GoReaderPalette pal) {
     if (_title.isEmpty && _sourceHost.isEmpty) return const SizedBox.shrink();
     final toks = _tokenize(_title);
     return Padding(
@@ -844,40 +1106,37 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           if (_sourceHost.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: Go.sp4),
-              child: Text(_sourceHost.toUpperCase(), style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: Go.primary)),
+              child: Text(_sourceHost.toUpperCase(), style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: pal.accent)),
             ),
-          Wrap(
-            children: [
-              for (var ti = 0; ti < toks.length; ti++)
-                toks[ti].word
-                    ? GestureDetector(
-                        onTap: () => _onTok(toks[ti], false, _title, -1, ti, isTitle: true),
-                        onLongPress: () => _onTok(toks[ti], true, _title, -1, ti, isTitle: true),
-                        child: Text(toks[ti].text, style: const TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: Go.onSurface)),
-                      )
-                    : Text(toks[ti].text, style: const TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: Go.onSurface)),
-            ],
-          ),
+          if (toks.isNotEmpty)
+            _TitleText(
+              toks: toks,
+              color: pal.ink,
+              onTok: (ti, isLong) {
+                final tk = ti < toks.length ? toks[ti] : const _Tok('', false);
+                _onTok(tk, isLong, _title, -1, ti, isTitle: true);
+              },
+            ),
           const SizedBox(height: Go.sp3),
           Wrap(
             spacing: Go.sp2,
             runSpacing: Go.sp2,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(_dateText, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+              Text(_dateText, style: TextStyle(fontSize: Go.fsMeta, color: pal.meta)),
               if (_readMins > 0)
-                Text('· $_readMins 分钟阅读', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                Text('· $_readMins 分钟阅读', style: TextStyle(fontSize: Go.fsMeta, color: pal.meta)),
               if (_status == 'gone')
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(color: Go.danger.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('源已下线，显示本地缓存', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.danger)),
+                  decoration: BoxDecoration(color: pal.danger.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Text('源已下线，显示本地缓存', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: pal.danger)),
                 ),
               if (_useCurated)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('AI 精选版', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.primary)),
+                  decoration: BoxDecoration(color: pal.accent.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Text('AI 精选版', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: pal.accent)),
                 ),
             ],
           ),
@@ -886,10 +1145,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     );
   }
 
-  Widget _imageBlock(ArticleBlock b, int bi) {
+  Widget _imageBlock(ArticleBlock b, int bi, GoReaderPalette pal) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: Go.sp5),
-      decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+      decoration: BoxDecoration(color: pal.card, borderRadius: BorderRadius.circular(Go.rMd)),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -905,7 +1164,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           if (b.alt != null && b.alt!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(Go.sp3, Go.sp2, Go.sp3, Go.sp3),
-              child: Text(b.alt!, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: 1.4)),
+              child: Text(b.alt!, style: TextStyle(fontSize: Go.fsMeta, color: pal.meta, height: 1.4)),
             ),
         ],
       ),
@@ -983,7 +1242,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     );
   }
 
-  Widget _selBar() {
+  Widget _selBar(GoReaderPalette pal) {
     final text = _selectedText.isNotEmpty ? _selectedText : _selText;
     final preview = text.length > 24 ? '${text.substring(0, 24)}…' : text;
     return Positioned(
@@ -992,7 +1251,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       bottom: MediaQuery.of(context).padding.bottom + Go.sp4,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-        decoration: BoxDecoration(color: const Color(0xFF2D2A35), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.shadow3),
+        decoration: BoxDecoration(color: pal.bar, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: pal.divider, width: 0.5)),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1000,7 +1259,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             Text(preview,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm, height: Go.lhSnug)),
+                style: TextStyle(color: pal.onBar, fontSize: Go.fsBodySm, height: Go.lhSnug)),
             const SizedBox(height: Go.sp3),
             // Wrap 而非 Row：系统字号放大时按钮换行，不会横向溢出（textScaler 回归铁律）。
             Wrap(
@@ -1008,11 +1267,11 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
               runSpacing: Go.sp2,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _selBtn('朗读', onTap: _readSelection),
-                _selBtn('查询', onTap: _querySelection),
-                _selBtn('翻译', onTap: _translateSelection),
-                _selBtn('收藏', onTap: _saveSentence),
-                GestureDetector(onTap: _clearSelection, child: const Text('取消', style: TextStyle(color: Color(0xBFFFFFFF), fontSize: Go.fsBodySm))),
+                _selBtn('朗读', pal, onTap: _readSelection),
+                _selBtn('查询', pal, onTap: _querySelection),
+                _selBtn('翻译', pal, onTap: _translateSelection),
+                _selBtn('收藏', pal, onTap: _saveSentence),
+                GestureDetector(onTap: _clearSelection, child: Text('取消', style: TextStyle(color: pal.onBar.withValues(alpha: 0.7), fontSize: Go.fsBodySm))),
               ],
             ),
           ],
@@ -1021,49 +1280,72 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     );
   }
 
-  Widget _selBtn(String label, {required VoidCallback onTap}) => GestureDetector(
+  Widget _selBtn(String label, GoReaderPalette pal, {required VoidCallback onTap}) => GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp2),
-          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm)),
+          decoration: BoxDecoration(color: pal.accent.withValues(alpha: 0.22), borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(color: pal.onBar, fontSize: Go.fsBodySm)),
         ),
       );
 
-  Widget _ttsMask() {
-    return GestureDetector(
-      onTap: () async {
-        await ref.read(ttsProvider).stop();
-        setState(() {
-          _ttsSynthesizing = false;
-          _ttsPlaying = false;
-        });
-      },
-      child: Container(
-        color: Colors.black.withValues(alpha: 0.32),
-        alignment: Alignment.center,
+  /// 全文朗读状态胶囊：浮在底部，只占自身一小块（不遮内容、不拦滚动）。
+  /// 文案/转轮是纯装饰（IgnorePointer），只有「取消/停止」按钮可点。
+  /// 「正在生成语音…」= 等第一段云端音频；「朗读中 · 3/42」= 播放中（句号来自 _ttsSegVer）。
+  Widget _ttsPill(GoReaderPalette pal) {
+    return Positioned(
+      left: Go.sp8,
+      right: Go.sp8,
+      bottom: MediaQuery.of(context).padding.bottom + Go.sp6,
+      child: Center(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: Go.sp10, vertical: Go.sp8),
-          decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
+          decoration: BoxDecoration(
+            color: pal.bar,
+            borderRadius: BorderRadius.circular(Go.rFull),
+            border: Border.all(color: pal.divider, width: 0.5),
+          ),
+          // Wrap：系统字号放大时文字与按钮换行，不横向溢出（textScaler 铁律）。
+          child: Wrap(
+            spacing: Go.sp4,
+            runSpacing: Go.sp2,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.center,
             children: [
-              const PolySpinner(),
-              const SizedBox(height: Go.sp4),
-              const Text('正在朗读…', style: TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
-              const SizedBox(height: Go.sp4),
+              IgnorePointer(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (_ttsSynthesizing) ...[
+                    const PolySpinner(size: 16),
+                    const SizedBox(width: Go.sp3),
+                    Text('正在生成语音…', style: TextStyle(fontSize: Go.fsMeta, color: pal.onBar)),
+                  ] else
+                    ValueListenableBuilder<int>(
+                      valueListenable: _ttsSegVer,
+                      builder: (_, seg, _) => Text(
+                        '朗读中 · ${seg < 0 ? 1 : seg + 1}/${_segs.length}',
+                        style: TextStyle(fontSize: Go.fsMeta, color: pal.onBar),
+                      ),
+                    ),
+                ]),
+              ),
               GestureDetector(
                 onTap: () async {
                   await ref.read(ttsProvider).stop();
-                  setState(() {
-                    _ttsSynthesizing = false;
-                    _ttsPlaying = false;
-                  });
+                  if (mounted) {
+                    setState(() {
+                      _ttsSynthesizing = false;
+                      _ttsPlaying = false;
+                      _ttsArticle = false;
+                    });
+                  }
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp2),
-                  decoration: BoxDecoration(border: Border.all(color: Go.primary), borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('取消', style: TextStyle(fontSize: Go.fsBodySm, color: Go.primary)),
+                  padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
+                  decoration: BoxDecoration(
+                    color: pal.accent.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(Go.rFull),
+                  ),
+                  child: Text(_ttsSynthesizing ? '取消' : '停止', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: pal.onBar)),
                 ),
               ),
             ],
@@ -1087,6 +1369,16 @@ class _ParaText extends StatefulWidget {
   final void Function(int ti, bool isLong) onTok;
   final VoidCallback onEmptyLongPress;
 
+  /// 选中高亮底色 / 朗读定位闪色（默认沿用 Go token，阅读页换肤时传入）。
+  final Color selBg;
+  final Color flashColor;
+
+  /// 跟读高亮：句表（身份在整次朗读中保持稳定）+ 当前句下标通知 + 高亮底色。
+  /// 本段只在「当前句属于自己」的 token 区间变化时才重建，整页不重建。
+  final List<_TtsSeg> segs;
+  final ValueNotifier<int> segVer;
+  final Color segBg;
+
   const _ParaText({
     required this.pi,
     required this.toks,
@@ -1096,6 +1388,11 @@ class _ParaText extends StatefulWidget {
     required this.flashTok,
     required this.onTok,
     required this.onEmptyLongPress,
+    this.selBg = Go.selWord,
+    this.flashColor = Go.primary,
+    this.segs = const [],
+    required this.segVer,
+    this.segBg = const Color(0x248B5CF6),
   });
 
   @override
@@ -1106,6 +1403,10 @@ class _ParaTextState extends State<_ParaText> {
   final _rpKey = GlobalKey();
   Set<int> _mine = const {};
   late final TapGestureRecognizer _tap;
+
+  /// 当前句在本段的 token 区间（-1/-1 = 不高亮）。
+  int _segFrom = -1;
+  int _segTo = -1;
   static const _indent = TextSpan(text: '\u2003\u2003');
 
   @override
@@ -1113,7 +1414,9 @@ class _ParaTextState extends State<_ParaText> {
     super.initState();
     _tap = TapGestureRecognizer()..onTapDown = (d) => _hit(d.globalPosition, false);
     widget.selVer.addListener(_onSelChanged);
+    widget.segVer.addListener(_onSegChanged);
     _mine = _slice();
+    _syncSeg();
   }
 
   @override
@@ -1123,13 +1426,41 @@ class _ParaTextState extends State<_ParaText> {
       old.selVer.removeListener(_onSelChanged);
       widget.selVer.addListener(_onSelChanged);
     }
+    if (old.segVer != widget.segVer) {
+      old.segVer.removeListener(_onSegChanged);
+      widget.segVer.addListener(_onSegChanged);
+    }
     _mine = _slice();
+    _syncSeg();
   }
 
   void _onSelChanged() {
     final next = _slice();
     if (setEquals(next, _mine)) return;
     setState(() => _mine = next);
+  }
+
+  /// 当前朗读句变化：只有本段的区间真的变了才 setState（其它段安静跳过）。
+  void _onSegChanged() {
+    final oldFrom = _segFrom, oldTo = _segTo;
+    _syncSeg();
+    if (_segFrom == oldFrom && _segTo == oldTo) return;
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  void _syncSeg() {
+    final idx = widget.segVer.value;
+    var from = -1, to = -1;
+    if (idx >= 0 && idx < widget.segs.length) {
+      final s = widget.segs[idx];
+      if (s.pi == widget.pi) {
+        from = s.tiStart;
+        to = s.tiEnd;
+      }
+    }
+    _segFrom = from;
+    _segTo = to;
   }
 
   Set<int> _slice() {
@@ -1175,6 +1506,7 @@ class _ParaTextState extends State<_ParaText> {
   @override
   void dispose() {
     widget.selVer.removeListener(_onSelChanged);
+    widget.segVer.removeListener(_onSegChanged);
     _tap.dispose();
     super.dispose();
   }
@@ -1200,15 +1532,115 @@ class _ParaTextState extends State<_ParaText> {
   InlineSpan _span(_Tok tk, int ti) {
     final selected = _mine.contains(ti);
     final flash = widget.flashTok == ti;
-    final style = (selected || flash)
-        ? TextStyle(
-            backgroundColor: Go.selWord,
-            fontWeight: selected ? FontWeight.w600 : null,
-            color: flash ? Go.primary : null,
-          )
-        : null;
-    if (!tk.word) return TextSpan(text: tk.text, style: style);
-    return TextSpan(text: tk.text, style: style, recognizer: _tap);
+    final speaking = ti >= _segFrom && ti <= _segTo;
+    if (selected || flash || speaking) {
+      final style = TextStyle(
+        // 选中优先于跟读：选区加粗的语义不能被跟读底色盖掉。
+        backgroundColor: selected ? widget.selBg : widget.segBg,
+        fontWeight: selected ? FontWeight.w600 : null,
+        color: flash ? widget.flashColor : null,
+      );
+      if (!tk.word) return TextSpan(text: tk.text, style: style);
+      return TextSpan(text: tk.text, style: style, recognizer: _tap);
+    }
+    if (!tk.word) return TextSpan(text: tk.text);
+    return TextSpan(text: tk.text, recognizer: _tap);
+  }
+}
+
+/// 标题：整条标题排成一个 `Text.rich`。
+/// 以前是 `Wrap` + 每个 token 一个 `Text`——那样超长单词没有行内换行机会，只能溢出/裁切；
+/// 合成一段文本后交给引擎断行，长词会正常折行。
+/// 点击/长按仍按 token 命中：共用一个 `TapGestureRecognizer`，拿到字符偏移后二分定位 token（同 `_ParaText`）。
+class _TitleText extends StatefulWidget {
+  final List<_Tok> toks;
+  final void Function(int ti, bool isLong) onTok;
+
+  /// 标题 ink（默认沿用 Go token；阅读页换肤时传入）。
+  final Color color;
+
+  const _TitleText({required this.toks, required this.onTok, this.color = Go.onSurface});
+
+  @override
+  State<_TitleText> createState() => _TitleTextState();
+}
+
+class _TitleTextState extends State<_TitleText> {
+  final _rpKey = GlobalKey();
+  late final TapGestureRecognizer _tap;
+  late List<int> _starts;
+
+  TextStyle get _style => TextStyle(
+        fontFamily: Go.fontRead,
+        fontWeight: FontWeight.w700,
+        fontSize: Go.fsDisplay,
+        height: Go.lhTight,
+        color: widget.color,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    _tap = TapGestureRecognizer()..onTapUp = (d) => _hit(d.globalPosition, false);
+    _starts = _offsets(widget.toks);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TitleText old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.toks, widget.toks)) _starts = _offsets(widget.toks);
+  }
+
+  static List<int> _offsets(List<_Tok> toks) {
+    final out = <int>[];
+    var acc = 0;
+    for (final t in toks) {
+      out.add(acc);
+      acc += t.text.length;
+    }
+    return out;
+  }
+
+  void _hit(Offset global, bool isLong) {
+    final ro = _rpKey.currentContext?.findRenderObject();
+    if (ro is! RenderParagraph) return;
+    final pos = ro.getPositionForOffset(ro.globalToLocal(global));
+    var lo = 0;
+    var hi = _starts.length - 1;
+    var ti = -1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (_starts[mid] <= pos.offset) {
+        ti = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (ti < 0 || ti >= widget.toks.length || !widget.toks[ti].word) return;
+    widget.onTok(ti, isLong);
+  }
+
+  @override
+  void dispose() {
+    _tap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPressStart: (d) => _hit(d.globalPosition, true),
+      child: Text.rich(
+        key: _rpKey,
+        TextSpan(
+          style: _style,
+          children: [
+            for (final tk in widget.toks) TextSpan(text: tk.text, recognizer: tk.word ? _tap : null),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -1739,6 +2171,101 @@ class _TranslateSheetState extends ConsumerState<_TranslateSheet> {
           padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
           decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
           child: Text(label, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface)),
+        ),
+      );
+}
+
+/// 朗读音色设置弹层：8 个 Edge 神经音色（点选即保存 + 试听，需联网，失败自动回落实机朗读）+ 语速档位。
+/// 与词卡/翻译弹层一致走深色墨卡：两种阅读主题下都保持高对比，不做双份配色。
+class _VoiceSheet extends ConsumerStatefulWidget {
+  const _VoiceSheet();
+  @override
+  ConsumerState<_VoiceSheet> createState() => _VoiceSheetState();
+}
+
+class _VoiceSheetState extends ConsumerState<_VoiceSheet> {
+  @override
+  Widget build(BuildContext context) {
+    final cfg = ref.watch(appConfigProvider);
+    final mq = MediaQuery.of(context);
+    return Container(
+      constraints: BoxConstraints(maxHeight: mq.size.height * 0.7),
+      decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp5, Go.sp6, Go.sp3),
+            child: Row(
+              children: [
+                const Expanded(child: Text('朗读音色', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface))),
+                GestureDetector(onTap: () => Navigator.pop(context), child: const Text('×', style: TextStyle(fontSize: 24, color: Go.onSurface3))),
+              ],
+            ),
+          ),
+          const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(Go.sp5, Go.sp4, Go.sp5, mq.padding.bottom + Go.sp5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final v in kEdgeVoices) _voiceRow(v[0], v[1], cfg.ttsVoice == v[0]),
+                  const SizedBox(height: Go.sp5),
+                  const Text('语速', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.onSurface3, letterSpacing: 0.4)),
+                  const SizedBox(height: Go.sp3),
+                  // Wrap 而非 Row：系统字号放大/窄屏时档位按钮换行，不横向溢出。
+                  Wrap(
+                    spacing: Go.sp2,
+                    runSpacing: Go.sp2,
+                    children: [for (final s in _ttsSpeeds) _speedChip(s, cfg.ttsSpeed == s)],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _voiceRow(String id, String label, bool on) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () async {
+          await ref.read(appConfigProvider).setTts(voice: id);
+          // 选中即试听固定一句，让用户马上听到音色差别（preview 内部会先 stop）。
+          try {
+            await ref.read(ttsProvider).preview(id);
+          } catch (_) {}
+        },
+        child: Container(
+          margin: const EdgeInsets.only(bottom: Go.sp2),
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp4),
+          decoration: BoxDecoration(
+            color: on ? Go.primary.withValues(alpha: 0.14) : Go.surface2,
+            borderRadius: BorderRadius.circular(Go.rMd),
+            border: Border.all(color: on ? Go.primary : Go.outline, width: on ? 1 : 0.5),
+          ),
+          child: Row(children: [
+            Expanded(child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: on ? FontWeight.w600 : null, color: on ? Go.onSurface : Go.onSurface2))),
+            if (on) ...[
+              const SizedBox(width: Go.sp3),
+              const Icon(Icons.check, size: 16, color: Go.primary),
+            ],
+          ]),
+        ),
+      );
+
+  Widget _speedChip(double v, bool on) => GestureDetector(
+        onTap: () => ref.read(appConfigProvider).setTts(speed: v),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
+          decoration: BoxDecoration(
+            color: on ? Go.primary : Go.surface2,
+            borderRadius: BorderRadius.circular(Go.rFull),
+            border: Border.all(color: on ? Go.primary : Go.outline, width: 0.5),
+          ),
+          child: Text(v.toStringAsFixed(1), style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: on ? Go.onPrimary : Go.onSurface2)),
         ),
       );
 }

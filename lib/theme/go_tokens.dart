@@ -139,3 +139,102 @@ class Go {
   static const appbarH = 52.0; // 104rpx
   static const navH = 55.0; // 110rpx
 }
+
+// =====================================================================
+// 阅读页配色：深色降眩光（night，默认）/ 暖纸色（paper）
+// 正文长时间阅读面专用——不套 Go 的近白 ink，也不铺紫青光晕。
+// =====================================================================
+class GoReaderPalette {
+  /// 页面底色（整页实色，正文背后不允许光晕）。
+  final Color bg;
+
+  /// 面板表面：顶栏 / 设置面板 / 选择模式提示条。
+  final Color surface;
+
+  /// 略抬升的小卡片：步进按钮、图片占位、「正文未缓存」卡。
+  final Color card;
+
+  /// 正文主 ink（对比度目标 ≈10:1，明显低于纯白眩光）。
+  final Color ink;
+
+  /// 次级文字（帮助语 / 词形 / 选区预览）。
+  final Color secondary;
+
+  /// 元信息小字（日期 / 分钟数 / 「全文完」）。
+  final Color meta;
+
+  /// 分隔线。
+  final Color divider;
+
+  /// 强调色（night 沿用 Go.primary；paper 用更深的紫保证浅底可读）。
+  final Color accent;
+
+  /// 词选中高亮底色。
+  final Color sel;
+
+  /// 错误/危险色（paper 上需要比 Go.danger 更深才可读）。
+  final Color danger;
+
+  /// 底部选区操作条（两种主题下都是「墨色卡片」，刻意压住背景）。
+  final Color bar;
+  final Color onBar;
+
+  final bool isNight;
+
+  const GoReaderPalette({
+    required this.bg,
+    required this.surface,
+    required this.card,
+    required this.ink,
+    required this.secondary,
+    required this.meta,
+    required this.divider,
+    required this.accent,
+    required this.sel,
+    required this.danger,
+    required this.bar,
+    required this.onBar,
+    required this.isNight,
+  });
+}
+
+class GoReader {
+  GoReader._();
+
+  /// 夜读：暖中性近黑底 + 柔灰紫 ink（≈11:1 对比，取代 #ECE9F5 的白茫茫）。
+  static const night = GoReaderPalette(
+    bg: Color(0xFF12101B),
+    surface: Color(0xFF1A1727),
+    card: Color(0xFF221E30),
+    ink: Color(0xFFCFC8DC), // ≈11.5:1 on bg
+    secondary: Color(0xFFA79FB8), // ≈7.5:1
+    meta: Color(0xFF7F7791), // ≈4.4:1（小字元信息）
+    divider: Color(0xFF2E2A3D),
+    accent: Go.primary,
+    sel: Color(0x4DE072B0),
+    danger: Color(0xFFE072B0),
+    bar: Color(0xFF241F2E),
+    onBar: Color(0xFFECE9F5),
+    isNight: true,
+  );
+
+  /// 纸色：暖纸底 + 暖深灰 ink（≈10:1 对比），强调紫加深到浅底可读。
+  static const paper = GoReaderPalette(
+    bg: Color(0xFFF3EBDD),
+    surface: Color(0xFFEAE0CE),
+    card: Color(0xFFE2D6C0),
+    ink: Color(0xFF3B352C), // ≈10.3:1 on bg
+    secondary: Color(0xFF6B6255), // ≈5.0:1
+    meta: Color(0xFF746A5C), // ≈4.4:1
+    divider: Color(0xFFD4C7B0),
+    accent: Color(0xFF6D4FC0), // ≈5.0:1 on bg
+    sel: Color(0x336D4FC0),
+    danger: Color(0xFFB23B6E),
+    bar: Color(0xFF3B352C),
+    onBar: Color(0xFFF3EBDD),
+    isNight: false,
+  );
+
+  /// AppConfigService.readerTheme → 调色板（未知值回落夜读）。
+  static GoReaderPalette of(String theme) => theme == 'paper' ? paper : night;
+}

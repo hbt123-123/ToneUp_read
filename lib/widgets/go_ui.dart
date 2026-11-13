@@ -14,14 +14,19 @@ class GoBackdrop extends StatelessWidget {
   final Widget child;
   final bool globe;
   final bool globeActive;
-  const GoBackdrop({super.key, required this.child, this.globe = false, this.globeActive = true});
+
+  /// 非空时铺一层实色底、**不画紫青光晕**（阅读面用，长文阅读不能有背景眩光）。
+  final Color? surface;
+  const GoBackdrop({super.key, required this.child, this.globe = false, this.globeActive = true, this.surface});
   @override
   Widget build(BuildContext context) => Container(
-        color: Go.bg,
+        color: surface ?? Go.bg,
         child: Stack(
           children: [
-            Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowPurple))),
-            Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowCyan))),
+            if (surface == null) ...[
+              Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowPurple))),
+              Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowCyan))),
+            ],
             if (globe) Positioned.fill(child: GoGlobe(active: globeActive)),
             child,
           ],
@@ -107,16 +112,20 @@ class GoPage extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
   final bool globe;
   final bool globeActive;
-  const GoPage({super.key, required this.child, this.navPad = false, this.topPad = true, this.padding, this.globe = false, this.globeActive = true});
+
+  /// 非空时替换整页底色并关闭光晕背景（阅读页用）。
+  final Color? surface;
+  const GoPage({super.key, required this.child, this.navPad = false, this.topPad = true, this.padding, this.globe = false, this.globeActive = true, this.surface});
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     return Scaffold(
-      backgroundColor: Go.bg,
+      backgroundColor: surface ?? Go.bg,
       body: GoBackdrop(
         globe: globe,
         globeActive: globeActive,
+        surface: surface,
         child: Padding(
           padding: padding ??
               EdgeInsets.only(
@@ -154,7 +163,25 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
   final List<Widget> actions;
   final Widget? leading;
   final GoAppBarStyle style;
-  const GoAppBar({super.key, required this.title, this.actions = const [], this.leading, this.style = GoAppBarStyle.normal});
+
+  /// 以下四项默认沿用 Go token，仅阅读页等需要换肤的场景传入。
+  final Color? surface;
+  final Color? titleColor;
+  final Color? borderColor;
+
+  /// floating 样式的投影；传 const [] 表示无投影（融入阅读面）。
+  final List<BoxShadow>? shadow;
+  const GoAppBar({
+    super.key,
+    required this.title,
+    this.actions = const [],
+    this.leading,
+    this.style = GoAppBarStyle.normal,
+    this.surface,
+    this.titleColor,
+    this.borderColor,
+    this.shadow,
+  });
 
   @override
   Size get preferredSize => const Size.fromHeight(Go.appbarH);
@@ -172,17 +199,17 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
         color: transparent
             ? Colors.transparent
             : tonal
-                ? Go.primary95
+                ? (surface ?? Go.primary95)
                 : floating
-                    ? Go.surfaceRaised.withValues(alpha: 0.86)
-                    : Go.surfaceRaised,
+                    ? (surface ?? Go.surfaceRaised.withValues(alpha: 0.86))
+                    : (surface ?? Go.surfaceRaised),
         border: Border(
           bottom: BorderSide(
-            color: transparent || tonal || floating ? Colors.transparent : Go.outline,
+            color: borderColor ?? (transparent || tonal || floating ? Colors.transparent : Go.outline),
             width: 0.5,
           ),
         ),
-        boxShadow: floating ? Go.elev1 : null,
+        boxShadow: floating ? (shadow ?? Go.elev1) : null,
       ),
       child: Row(
         children: [
@@ -192,10 +219,10 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: Go.fsTitle,
                 fontWeight: FontWeight.w600,
-                color: Go.onSurface,
+                color: titleColor ?? Go.onSurface,
               ),
             ),
           ),
@@ -218,11 +245,15 @@ List<Widget> _intersperse(List<Widget> items, Widget sep) {
 
 /// 圆形返回键（对齐 .back）
 class GoBack extends StatelessWidget {
-  const GoBack({super.key, this.onTap});
+  const GoBack({super.key, this.onTap, this.surface, this.iconColor});
   final VoidCallback? onTap;
+
+  /// 默认沿用 Go token；阅读页换肤时传入。
+  final Color? surface;
+  final Color? iconColor;
   @override
   Widget build(BuildContext context) => Material(
-        color: Go.surface2,
+        color: surface ?? Go.surface2,
         shape: const CircleBorder(),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -230,7 +261,7 @@ class GoBack extends StatelessWidget {
           child: SizedBox(
             width: Go.r(72),
             height: Go.r(72),
-            child: Center(child: GoIcon('arrow-left', size: Go.r(40), color: Go.onSurface)),
+            child: Center(child: GoIcon('arrow-left', size: Go.r(40), color: iconColor ?? Go.onSurface)),
           ),
         ),
       );

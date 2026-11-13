@@ -38,6 +38,11 @@ dependencies:
   sqflite: ^2.4.4
   http: ^1.6.0
   flutter_tts: ^4.2.0
+  # Edge 合成音频的播放器：逐句合成 mp3 后串成队列播放。
+  # 锁在 0.9.x：0.10 移除了 ConcatenatingAudioSource。
+  just_audio: ^0.9.40
+  # Edge 神经音色直连合成（客户端直连，无密钥、无网关）。
+  edge_tts: ^0.1.5
   crypto: ^3.0.7
   shared_preferences: ^2.5.5
   path_provider: ^2.1.6

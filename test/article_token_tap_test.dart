@@ -45,6 +45,35 @@ class _ArtDb extends FakeDb {
   }
 }
 
+/// 45 字符的单个英文词（无任何断行机会）：用来验证标题长词必须折行，而不是溢出/裁切。
+const _longWord = 'pneumonoultramicroscopicsilicovolcanoconiosis';
+
+class _TitleDb extends FakeDb {
+  _TitleDb(this.title);
+  final String title;
+  static const _body = 'alpha beta gamma';
+
+  @override
+  Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async {
+    if (sql.contains('plainText, blocks')) {
+      return [
+        {
+          'id': 1,
+          'title': title,
+          'sourceUrl': 'https://x/',
+          'wordCount': 3,
+          'plainText': _body,
+          'blocks': jsonEncode([ArticleBlock(type: 'p', text: _body).toJson()]),
+        }
+      ];
+    }
+    if (sql.contains('FROM articles')) {
+      return [<String, dynamic>{'id': 1, 'title': title, 'sourceUrl': 'https://x/', 'wordCount': 3}];
+    }
+    return [];
+  }
+}
+
 const _indent = '\u2003\u2003';
 
 bool _hasHighlight(TextSpan span) {
@@ -172,6 +201,61 @@ void main() {
     expect(find.textContaining('word0_0'), findsWidgets, reason: '长按空白应选中整段并出现选区条');
 
     // 显式卸载以在测试内触发 dispose，并让 TtsService.stop() 的 timeout 计时器走完
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  // 回归：空白 token 曾被换成 U+00A0（旧 uni-app inline-block 布局的产物），
+  // Flutter 里 NBSP 没有换行机会，整段只能从单词中间断开（"Mada M/asr"）。
+  testWidgets('正文用普通空格，渲染文本不含 NBSP', (tester) async {
+    tester.view.physicalSize = const Size(600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(_ArtDb())],
+      child: const MaterialApp(home: ArticleScreen(articleId: 1)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    final paras = _paragraphs(tester);
+    expect(paras.length, _paras);
+    for (final w in paras) {
+      expect(w.text.toPlainText().contains('\u00A0'), isFalse, reason: 'NBSP 会让整段失去换行点，引擎只能从词中间断行');
+    }
+    // 1:1 字符替换：渲染出来的整段文本与原文逐字一致（缩进 + 原文）。
+    expect(paras.first.text.toPlainText(), _indent + _paraText(0), reason: '空白替换不能改变 token 长度，否则偏移/二分全错');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  // 回归：标题以前是 Wrap + 每 token 一个 Text，超过行宽的长词只能溢出/裁切。
+  testWidgets('窄视口下标题长单词折行、不溢出', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(_TitleDb('The $_longWord Problem'))],
+      child: const MaterialApp(home: ArticleScreen(articleId: 1)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    expect(tester.takeException(), isNull, reason: '标题不应触发 RenderFlex 溢出');
+
+    final cands = tester.widgetList<RichText>(find.byType(RichText)).where((w) => w.text.toPlainText().contains(_longWord)).toList();
+    expect(cands, isNotEmpty, reason: '标题必须整条渲染（Text.rich），长词不能被拆成多个 Text');
+    final rt = cands.first;
+    expect(rt.text.toPlainText(), contains(_longWord));
+
+    final rp = tester.renderObject<RenderParagraph>(find.byWidget(rt));
+    expect(rp.didExceedMaxLines, isFalse);
+    expect(rp.size.width, lessThanOrEqualTo(320));
+    expect(rp.size.height, greaterThan(rp.preferredLineHeight * 1.4), reason: '长词应折成多行，而不是撑出屏幕');
+
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 5));
   });

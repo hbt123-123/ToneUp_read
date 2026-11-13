@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'tts_voices.dart';
+
 class AppConfigService extends ChangeNotifier {
   SharedPreferences? _prefs;
   bool _secureOk = !Platform.environment.containsKey('FLUTTER_TEST');
@@ -11,6 +13,13 @@ class AppConfigService extends ChangeNotifier {
   // 阅读设置（对齐 store.reader）
   double _fontSize = 18;
   double _lineHeight = 1.8;
+
+  /// 阅读页配色：`night` 低眩光深色 / `paper` 暖纸色。
+  String _readerTheme = 'night';
+
+  // 朗读：Edge 神经音色 id 与语速（语速 0.7-1.3，1.0 为原速）。
+  String _ttsVoice = kEdgeDefaultVoice;
+  double _ttsSpeed = 1.0;
 
   // 云端配置：地址与密钥全部内置在 App 里，用户既看不到也改不了（「我的」页已无服务配置入口）。
   // 密钥不落源码，构建时用 --dart-define 注入，见 tool/release.ps1。
@@ -44,6 +53,9 @@ class AppConfigService extends ChangeNotifier {
   bool get darkMode => _darkMode;
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
+  String get readerTheme => _readerTheme;
+  String get ttsVoice => _ttsVoice;
+  double get ttsSpeed => _ttsSpeed;
 
   /// 云端文章接口（列表 / 详情 / 缓存正文）。
   String get articleApiBase => _articleApiBase;
@@ -88,6 +100,10 @@ class AppConfigService extends ChangeNotifier {
     _darkMode = _prefs!.getBool('dark_mode') ?? true;
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
+    _readerTheme = _prefs!.getString('reader_theme') ?? 'night';
+    // 老用户本地存的是网关音色 id（alex/bella…），这里归一成 Edge 音色，否则合成必然失败。
+    _ttsVoice = normalizeEdgeVoice(_prefs!.getString('tts_voice'));
+    _ttsSpeed = (_prefs!.getDouble('tts_speed') ?? 1.0).clamp(0.7, 1.3);
 
     _articleApiBase = _prefs!.getString(_kArticleApiBase) ?? defaultArticleApiBase;
     _gatewayBase = _prefs!.getString(_kGatewayBase) ?? defaultGatewayBase;
@@ -132,7 +148,7 @@ class AppConfigService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setReader({double? fontSize, double? lineHeight}) async {
+  Future<void> setReader({double? fontSize, double? lineHeight, String? theme}) async {
     if (fontSize != null) {
       _fontSize = fontSize;
       await _prefs!.setDouble('reader_fontSize', fontSize);
@@ -140,6 +156,23 @@ class AppConfigService extends ChangeNotifier {
     if (lineHeight != null) {
       _lineHeight = lineHeight;
       await _prefs!.setDouble('reader_lineHeight', lineHeight);
+    }
+    if (theme != null && theme.isNotEmpty) {
+      _readerTheme = theme;
+      await _prefs!.setString('reader_theme', theme);
+    }
+    notifyListeners();
+  }
+
+  /// 朗读音色 / 语速（Edge TTS）。语速夹在 0.7-1.3，避免用户调出极端值。
+  Future<void> setTts({String? voice, double? speed}) async {
+    if (voice != null && voice.isNotEmpty) {
+      _ttsVoice = normalizeEdgeVoice(voice);
+      await _prefs!.setString('tts_voice', _ttsVoice);
+    }
+    if (speed != null) {
+      _ttsSpeed = speed.clamp(0.7, 1.3);
+      await _prefs!.setDouble('tts_speed', _ttsSpeed);
     }
     notifyListeners();
   }
