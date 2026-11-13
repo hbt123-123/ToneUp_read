@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/vocab_screen.dart';
+import 'package:toneup_read/features/favorites/screens/favorites_screen.dart';
 import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/db_service.dart';
 import 'package:toneup_read/services/http_service.dart';
@@ -146,7 +146,7 @@ void main() {
     // === E) 词汇列表滚动帧耗时 ===
     await tester.pumpWidget(ProviderScope(
       overrides: [dbProvider.overrideWithValue(db)],
-      child: const MaterialApp(home: VocabScreen()),
+      child: const MaterialApp(home: FavoritesScreen()),
     ));
     await tester.pump();
     await Future<void>.delayed(const Duration(seconds: 2));

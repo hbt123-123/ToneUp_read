@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/vocab_screen.dart';
+import 'package:toneup_read/features/favorites/screens/favorites_screen.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
 import 'fake_db.dart';
@@ -67,7 +67,7 @@ List<String> _mockClipboard() {
 Future<void> _pumpVocab(WidgetTester tester, _VocabDb db) async {
   await tester.pumpWidget(ProviderScope(
     overrides: [dbProvider.overrideWithValue(db)],
-    child: const MaterialApp(home: VocabScreen()),
+    child: const MaterialApp(home: FavoritesScreen()),
   ));
   await tester.pump(); // 首帧：postFrameCallback 里发起 _load
   await tester.pump(const Duration(milliseconds: 20)); // syncHeads/getHeads/dueCount 完成

@@ -8,44 +8,58 @@ import 'package:toneup_read/widgets/go_globe.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
 
 // =====================================================================
-// 深色玻璃背景：近黑紫底 + 紫青光晕（可选：程序化线框地球）
+// 背景：主题底色 + 紫青光晕（可选：程序化线框地球）
 // =====================================================================
 class GoBackdrop extends StatelessWidget {
   final Widget child;
   final bool globe;
   final bool globeActive;
 
-  /// 非空时铺一层实色底、**不画紫青光晕**（阅读面用，长文阅读不能有背景眩光）。
+  /// 非空时铺一层实色底、**不画光晕**（阅读面用，长文阅读不能有背景眩光）。
   final Color? surface;
   const GoBackdrop({super.key, required this.child, this.globe = false, this.globeActive = true, this.surface});
-  @override
-  Widget build(BuildContext context) => Container(
-        color: surface ?? Go.bg,
-        child: Stack(
-          children: [
-            if (surface == null) ...[
-              Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowPurple))),
-              Positioned.fill(child: Container(decoration: const BoxDecoration(gradient: _glowCyan))),
-            ],
-            if (globe) Positioned.fill(child: GoGlobe(active: globeActive)),
-            child,
-          ],
-        ),
-      );
-}
 
-const _glowPurple = RadialGradient(
-  center: Alignment(-0.7, -0.9),
-  radius: 1.35,
-  colors: [Color(0xAA7C4DFF), Color(0x00000000)],
-  stops: [0, 0.65],
-);
-const _glowCyan = RadialGradient(
-  center: Alignment(0.95, 1.1),
-  radius: 1.4,
-  colors: [Color(0x7341E0D0), Color(0x00000000)],
-  stops: [0, 0.7],
-);
+  @override
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      color: surface ?? g.bg,
+      child: Stack(
+        children: [
+          if (surface == null) ...[
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: const Alignment(-0.7, -0.9),
+                    radius: 1.35,
+                    colors: [g.primary.withValues(alpha: dark ? 0.55 : 0.14), g.primary.withValues(alpha: 0)],
+                    stops: const [0, 0.65],
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: const Alignment(0.95, 1.1),
+                    radius: 1.4,
+                    colors: [g.secondary.withValues(alpha: dark ? 0.45 : 0.10), g.secondary.withValues(alpha: 0)],
+                    stops: const [0, 0.7],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (globe) Positioned.fill(child: GoGlobe(active: globeActive)),
+          child,
+        ],
+      ),
+    );
+  }
+}
 
 class GoGlowPulse extends StatefulWidget {
   final Widget child;
@@ -121,7 +135,7 @@ class GoPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     return Scaffold(
-      backgroundColor: surface ?? Go.bg,
+      backgroundColor: surface ?? GoPalette.of(context).bg,
       body: GoBackdrop(
         globe: globe,
         globeActive: globeActive,
@@ -164,7 +178,7 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? leading;
   final GoAppBarStyle style;
 
-  /// 以下四项默认沿用 Go token，仅阅读页等需要换肤的场景传入。
+  /// 以下四项默认沿用当前主题，仅阅读页等需要换肤的场景传入。
   final Color? surface;
   final Color? titleColor;
   final Color? borderColor;
@@ -188,6 +202,7 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     final top = MediaQuery.of(context).padding.top;
     final tonal = style == GoAppBarStyle.tonal;
     final floating = style == GoAppBarStyle.floating;
@@ -199,17 +214,17 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
         color: transparent
             ? Colors.transparent
             : tonal
-                ? (surface ?? Go.primary95)
+                ? (surface ?? g.primary95)
                 : floating
-                    ? (surface ?? Go.surfaceRaised.withValues(alpha: 0.86))
-                    : (surface ?? Go.surfaceRaised),
+                    ? (surface ?? g.surfaceRaised.withValues(alpha: 0.86))
+                    : (surface ?? g.surfaceRaised),
         border: Border(
           bottom: BorderSide(
-            color: borderColor ?? (transparent || tonal || floating ? Colors.transparent : Go.outline),
+            color: borderColor ?? (transparent || tonal || floating ? Colors.transparent : g.outline),
             width: 0.5,
           ),
         ),
-        boxShadow: floating ? (shadow ?? Go.elev1) : null,
+        boxShadow: floating ? (shadow ?? g.elev1) : null,
       ),
       child: Row(
         children: [
@@ -222,7 +237,7 @@ class GoAppBar extends StatelessWidget implements PreferredSizeWidget {
               style: TextStyle(
                 fontSize: Go.fsTitle,
                 fontWeight: FontWeight.w600,
-                color: titleColor ?? Go.onSurface,
+                color: titleColor ?? g.onSurface,
               ),
             ),
           ),
@@ -248,23 +263,26 @@ class GoBack extends StatelessWidget {
   const GoBack({super.key, this.onTap, this.surface, this.iconColor});
   final VoidCallback? onTap;
 
-  /// 默认沿用 Go token；阅读页换肤时传入。
+  /// 默认沿用当前主题；阅读页换肤时传入。
   final Color? surface;
   final Color? iconColor;
   @override
-  Widget build(BuildContext context) => Material(
-        color: surface ?? Go.surface2,
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap ?? () => Navigator.of(context).maybePop(),
-          child: SizedBox(
-            width: Go.r(72),
-            height: Go.r(72),
-            child: Center(child: GoIcon('arrow-left', size: Go.r(40), color: iconColor ?? Go.onSurface)),
-          ),
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return Material(
+      color: surface ?? g.surface2,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap ?? () => Navigator.of(context).maybePop(),
+        child: SizedBox(
+          width: Go.r(72),
+          height: Go.r(72),
+          child: Center(child: GoIcon('arrow-left', size: Go.r(40), color: iconColor ?? g.onSurface)),
         ),
-      );
+      ),
+    );
+  }
 }
 
 /// 图标按钮（对齐 .go-icon-btn，含 primary 玻璃质感变体）
@@ -292,8 +310,9 @@ class _GoIconBtnState extends State<GoIconBtn> {
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     final s = widget.size ?? Go.r(72);
-    final tint = widget.primary ? Go.primary : (widget.color ?? Go.onSurface2);
+    final tint = widget.primary ? g.primary : (widget.color ?? g.onSurface2);
     return AnimatedScale(
       scale: _down ? 0.86 : 1,
       duration: const Duration(milliseconds: 90),
@@ -313,14 +332,14 @@ class _GoIconBtnState extends State<GoIconBtn> {
             height: s,
             decoration: widget.primary
                 ? BoxDecoration(
-                    color: Go.primary.withValues(alpha: 0.08),
+                    color: g.primary.withValues(alpha: 0.08),
                     shape: BoxShape.circle,
-                    border: Border.all(color: Go.primary.withValues(alpha: 0.28)),
-                    boxShadow: [BoxShadow(color: Go.primary.withValues(alpha: 0.18), blurRadius: 8, offset: const Offset(0, 3))],
+                    border: Border.all(color: g.primary.withValues(alpha: 0.28)),
+                    boxShadow: [BoxShadow(color: g.primary.withValues(alpha: 0.18), blurRadius: 8, offset: const Offset(0, 3))],
                   )
                 : null,
             child: Center(
-              child: GoIcon(widget.icon, size: s * 0.55, color: widget.primary ? Go.primary : (widget.color ?? Go.onSurface2), spin: widget.spin),
+              child: GoIcon(widget.icon, size: s * 0.55, color: widget.primary ? g.primary : (widget.color ?? g.onSurface2), spin: widget.spin),
             ),
           ),
         ),
@@ -351,11 +370,11 @@ class GoSection extends StatelessWidget {
                     Expanded(
                       child: Text(
                         title.toUpperCase(),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: Go.fsMeta,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 0.9,
-                          color: Go.onSurface3,
+                          color: GoPalette.of(context).onSurface3,
                         ),
                       ),
                     ),
@@ -383,13 +402,14 @@ class GoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     Widget content = Container(
       padding: padding ?? const EdgeInsets.all(Go.sp5),
       decoration: BoxDecoration(
-        color: flat ? Go.glassBgStrong : Go.glassBg,
+        color: flat ? g.glassBgStrong : g.glassBg,
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: Go.glassBorder, width: 0.5),
-        boxShadow: flat ? null : Go.glassShadow,
+        border: Border.all(color: g.glassBorder, width: 0.5),
+        boxShadow: flat ? null : g.glassShadow,
       ),
       child: child,
     );
@@ -410,6 +430,85 @@ class GoCard extends StatelessWidget {
 }
 
 // =====================================================================
+// 列表行（对齐 .go-cell：图标 + 标题/副标题 + 右侧动作）
+// =====================================================================
+class GoListTile extends StatelessWidget {
+  final String icon;
+  final String title;
+  final String? subtitle;
+  final VoidCallback? onTap;
+  final bool danger;
+  final bool divider;
+  final bool highlight;
+
+  /// 主色小圆点（有更新提示时用）。
+  final bool dot;
+  final bool spin;
+  final Widget? trailing;
+
+  const GoListTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.onTap,
+    this.danger = false,
+    this.divider = true,
+    this.highlight = false,
+    this.dot = false,
+    this.spin = false,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return Column(
+      children: [
+        if (divider) Divider(height: 0.5, thickness: 0.5, color: g.outline),
+        InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
+            child: Row(
+              children: [
+                Container(
+                  width: Go.r(64),
+                  height: Go.r(64),
+                  decoration: BoxDecoration(color: danger ? g.danger.withValues(alpha: 0.14) : g.primary95, borderRadius: BorderRadius.circular(Go.rSm)),
+                  child: Center(child: GoIcon(icon, size: Go.r(48), color: danger ? g.danger : g.primary, spin: spin)),
+                ),
+                const SizedBox(width: Go.sp4),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: danger ? g.error : g.onSurface)),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 1),
+                        Text(subtitle!, style: TextStyle(fontSize: Go.fsMeta, color: highlight ? g.primary : g.onSurface3)),
+                      ],
+                    ],
+                  ),
+                ),
+                if (dot)
+                  Container(
+                    width: Go.sp4,
+                    height: Go.sp4,
+                    margin: const EdgeInsets.only(right: Go.sp2),
+                    decoration: BoxDecoration(color: g.primary, shape: BoxShape.circle),
+                  ),
+                if (trailing != null) trailing else Icon(Icons.chevron_right, size: 18, color: g.onSurfaceDisabled),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// =====================================================================
 // 按钮（对齐 .go-btn 及其变体）
 // =====================================================================
 enum GoBtnKind { filled, tonal, outlined, text }
@@ -425,11 +524,12 @@ class GoBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color fg = kind == GoBtnKind.filled ? (enabled ? Go.onPrimary : Go.onSurfaceDisabled) : Go.primary;
+    final g = GoPalette.of(context);
+    final Color fg = kind == GoBtnKind.filled ? (enabled ? g.onPrimary : g.onSurfaceDisabled) : g.primary;
     final Color bg = kind == GoBtnKind.filled
-        ? (enabled ? Go.primary : Go.surface)
+        ? (enabled ? g.primary : g.surface)
         : kind == GoBtnKind.tonal
-            ? Go.primary90
+            ? g.primary90
             : Colors.transparent;
     return SizedBox(
       width: block ? double.infinity : null,
@@ -444,8 +544,8 @@ class GoBtn extends StatelessWidget {
             padding: EdgeInsets.symmetric(horizontal: kind == GoBtnKind.text ? Go.sp4 : Go.sp6),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(Go.rFull),
-              border: kind == GoBtnKind.outlined ? Border.all(color: Go.primary, width: 1) : null,
-              boxShadow: kind == GoBtnKind.filled && enabled ? Go.glowPrimary : null,
+              border: kind == GoBtnKind.outlined ? Border.all(color: g.primary, width: 1) : null,
+              boxShadow: kind == GoBtnKind.filled && enabled ? g.glowPrimary : null,
             ),
             child: Row(
               mainAxisSize: block ? MainAxisSize.max : MainAxisSize.min,
@@ -473,12 +573,13 @@ class GoFab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     final mq = MediaQuery.of(context);
     return Positioned(
       right: Go.sp6,
       bottom: Go.navH + mq.padding.bottom + Go.sp6,
       child: Material(
-        color: Go.surfaceRaised,
+        color: g.surfaceRaised,
         borderRadius: BorderRadius.circular(Go.rFull),
         elevation: 4,
         child: InkWell(
@@ -488,12 +589,12 @@ class GoFab extends StatelessWidget {
             height: Go.r(96),
             padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
             constraints: BoxConstraints(minWidth: Go.r(112)),
-            decoration: BoxDecoration(border: Border.all(color: Go.primary.withValues(alpha: 0.5), width: 1), borderRadius: BorderRadius.circular(Go.rFull)),
+            decoration: BoxDecoration(border: Border.all(color: g.primary.withValues(alpha: 0.5), width: 1), borderRadius: BorderRadius.circular(Go.rFull)),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (icon != null) ...[GoIcon(icon!, size: Go.r(40), color: Go.primary), if (label.isNotEmpty) const SizedBox(width: Go.sp2)],
-                if (label.isNotEmpty) Text(label, style: const TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.primary)),
+                if (icon != null) ...[GoIcon(icon!, size: Go.r(40), color: g.primary), if (label.isNotEmpty) const SizedBox(width: Go.sp2)],
+                if (label.isNotEmpty) Text(label, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: g.primary)),
               ],
             ),
           ),
@@ -514,32 +615,35 @@ class GoEmpty extends StatelessWidget {
   final bool primary;
   const GoEmpty({super.key, this.icon = 'search', required this.title, this.desc, this.action, this.primary = true});
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Go.sp8, vertical: Go.sp16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: Go.r(128),
-              height: Go.r(128),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: primary ? Go.primary95 : Go.surface2,
-                shape: BoxShape.circle,
-                border: primary ? Border.all(color: Go.primary.withValues(alpha: 0.35), width: 1) : null,
-              ),
-              child: GoIcon(icon, size: Go.r(72), color: primary ? Go.primary : Go.onSurface3),
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Go.sp8, vertical: Go.sp16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: Go.r(128),
+            height: Go.r(128),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: primary ? g.primary95 : g.surface2,
+              shape: BoxShape.circle,
+              border: primary ? Border.all(color: g.primary.withValues(alpha: 0.35), width: 1) : null,
             ),
-            const SizedBox(height: Go.sp5),
-            Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: Go.onSurface)),
-            if (desc != null) ...[
-              const SizedBox(height: Go.sp2),
-              Text(desc!, textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: 1.6)),
-            ],
-            if (action != null) ...[const SizedBox(height: Go.sp6), action!],
+            child: GoIcon(icon, size: Go.r(72), color: primary ? g.primary : g.onSurface3),
+          ),
+          const SizedBox(height: Go.sp5),
+          Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: g.onSurface)),
+          if (desc != null) ...[
+            const SizedBox(height: Go.sp2),
+            Text(desc!, textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: g.onSurface3, height: 1.6)),
           ],
-        ),
-      );
+          if (action != null) ...[const SizedBox(height: Go.sp6), action!],
+        ],
+      ),
+    );
+  }
 }
 
 // =====================================================================
@@ -565,18 +669,22 @@ class _GoSkeletonState extends State<GoSkeleton> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AnimatedBuilder(
       animation: _c,
       builder: (context, _) => Container(
         width: widget.width,
         height: widget.height,
-        decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(widget.radius)),
+        decoration: BoxDecoration(color: g.surface2, borderRadius: BorderRadius.circular(widget.radius)),
         clipBehavior: Clip.antiAlias,
         child: FractionallySizedBox(
           widthFactor: 0.5,
           alignment: Alignment(-1 + 3 * _c.value, 0),
-          child: const DecoratedBox(
-            decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.transparent, Color(0x14FFFFFF), Colors.transparent])),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [Colors.transparent, (dark ? Colors.white : Colors.black).withValues(alpha: 0.08), Colors.transparent]),
+            ),
           ),
         ),
       ),
@@ -592,26 +700,29 @@ class GoSwitch extends StatelessWidget {
   final ValueChanged<bool>? onChanged;
   const GoSwitch({super.key, required this.value, this.onChanged});
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onChanged == null ? null : () => onChanged!(!value),
-        child: AnimatedContainer(
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return GestureDetector(
+      onTap: onChanged == null ? null : () => onChanged!(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        width: Go.r(92),
+        height: Go.r(52),
+        padding: EdgeInsets.all(Go.r(6)),
+        decoration: BoxDecoration(color: value ? g.primary : g.surfaceVariant, borderRadius: BorderRadius.circular(Go.rFull)),
+        child: AnimatedAlign(
           duration: const Duration(milliseconds: 240),
-          width: Go.r(92),
-          height: Go.r(52),
-          padding: EdgeInsets.all(Go.r(6)),
-          decoration: BoxDecoration(color: value ? Go.primary : Go.surfaceVariant, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: AnimatedAlign(
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOut,
-            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-            child: Container(
-              width: Go.r(40),
-              height: Go.r(40),
-              decoration: BoxDecoration(color: Go.surfaceRaised, shape: BoxShape.circle, boxShadow: Go.elev1),
-            ),
+          curve: Curves.easeOut,
+          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: Go.r(40),
+            height: Go.r(40),
+            decoration: BoxDecoration(color: g.surfaceRaised, shape: BoxShape.circle, boxShadow: g.elev1),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 // =====================================================================
@@ -621,30 +732,33 @@ class GoProgress extends StatelessWidget {
   final double value; // 0..1
   const GoProgress({super.key, required this.value});
   @override
-  Widget build(BuildContext context) => ClipRRect(
-        borderRadius: BorderRadius.circular(Go.rFull),
-        child: Container(
-          height: Go.r(12),
-          decoration: BoxDecoration(
-            color: Go.surfaceVariant,
-            border: Border.all(color: Go.outline, width: 0.5),
-          ),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: FractionallySizedBox(
-              widthFactor: value.clamp(0, 1),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 360),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Go.primary, Go.secondary]),
-                  borderRadius: BorderRadius.circular(Go.rFull),
-                  boxShadow: const [BoxShadow(color: Color(0x4D41E0D0), blurRadius: 8, offset: Offset(0, 0))],
-                ),
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(Go.rFull),
+      child: Container(
+        height: Go.r(12),
+        decoration: BoxDecoration(
+          color: g.surfaceVariant,
+          border: Border.all(color: g.outline, width: 0.5),
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FractionallySizedBox(
+            widthFactor: value.clamp(0, 1),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 360),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [g.primary, g.secondary]),
+                borderRadius: BorderRadius.circular(Go.rFull),
+                boxShadow: [BoxShadow(color: g.secondary.withValues(alpha: 0.30), blurRadius: 8, offset: Offset.zero)],
               ),
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 // =====================================================================
@@ -660,34 +774,37 @@ class GoField extends StatelessWidget {
   const GoField({super.key, this.controller, this.hint = '', this.maxLines = 1, this.obscure = false, this.onChanged, this.keyboardType});
 
   @override
-  Widget build(BuildContext context) => TextField(
-        controller: controller,
-        maxLines: maxLines,
-        obscureText: obscure,
-        onChanged: onChanged,
-        keyboardType: keyboardType,
-        style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface),
-        cursorColor: Go.primary,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Go.onSurfaceDisabled),
-          filled: true,
-          fillColor: Go.surface2,
-          contentPadding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(Go.rMd),
-            borderSide: const BorderSide(color: Go.outline, width: 0.5),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(Go.rMd),
-            borderSide: const BorderSide(color: Go.outline, width: 0.5),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(Go.rMd),
-            borderSide: const BorderSide(color: Go.primary, width: 1),
-          ),
+  Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
+    return TextField(
+      controller: controller,
+      maxLines: maxLines,
+      obscureText: obscure,
+      onChanged: onChanged,
+      keyboardType: keyboardType,
+      style: TextStyle(fontSize: Go.fsBody, color: g.onSurface),
+      cursorColor: g.primary,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: g.onSurfaceDisabled),
+        filled: true,
+        fillColor: g.surface2,
+        contentPadding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Go.rMd),
+          borderSide: BorderSide(color: g.outline, width: 0.5),
         ),
-      );
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Go.rMd),
+          borderSide: BorderSide(color: g.outline, width: 0.5),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Go.rMd),
+          borderSide: BorderSide(color: g.primary, width: 1),
+        ),
+      ),
+    );
+  }
 }
 
 // =====================================================================
@@ -757,6 +874,7 @@ class _PolySpinnerState extends State<PolySpinner> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     // 两个环每帧旋转；用 RepaintBoundary 把重绘限制在这个小方块内。
     return RepaintBoundary(
       child: SizedBox(
@@ -766,11 +884,11 @@ class _PolySpinnerState extends State<PolySpinner> with TickerProviderStateMixin
           children: [
             RotationTransition(
               turns: _cw,
-              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.primary, inset: 0, startQuarter: true)),
+              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: g.primary, inset: 0, startQuarter: true)),
             ),
             RotationTransition(
               turns: ReverseAnimation(_ccw),
-              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.tertiary, inset: widget.size * 0.16, startQuarter: false)),
+              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: g.tertiary, inset: widget.size * 0.16, startQuarter: false)),
             ),
           ],
         ),

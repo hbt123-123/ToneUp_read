@@ -1,85 +1,68 @@
 import 'package:flutter/material.dart';
 import 'go_tokens.dart';
 
-/// 兼容旧引用的语义色别名，全部指向 [Go] 令牌。
-class GoColors {
-  const GoColors._();
-
-  static const lightBg = Go.bg;
-  static const lightSurface = Go.surface;
-  static const lightPrimary = Go.primary;
-  static const lightText = Go.onSurface;
-  static const lightSubtleText = Go.onSurface2;
-  static const lightBorder = Go.outline;
-  static const lightAccent = Go.success;
-  static const lightDanger = Go.error;
-  static const lightWarn = Go.warning;
-
-  static const darkBg = Go.bg;
-  static const darkSurface = Go.surface;
-  static const darkPrimary = Go.primary;
-  static const darkText = Go.onSurface;
-  static const darkSubtleText = Go.onSurface2;
-  static const darkBorder = Go.outline;
-  static const darkAccent = Go.success;
-  static const darkDanger = Go.error;
-  static const darkWarn = Go.warning;
-}
-
+/// 明暗两套 Material 主题：颜色全部来自 [GoPalette]，并注册成 ThemeExtension，
+/// 页面组件用 `GoPalette.of(context)` 取色（不再引用固定的深色常量）。
 ThemeData _buildTheme(Brightness brightness) {
-  final scheme = ColorScheme.fromSeed(
-    seedColor: Go.primary,
+  final pal = brightness == Brightness.dark ? GoPalette.dark : GoPalette.light;
+  final scheme = ColorScheme(
     brightness: brightness,
-  ).copyWith(
-    primary: Go.primary,
-    onPrimary: Go.onPrimary,
-    primaryContainer: Go.primary95,
-    onPrimaryContainer: Go.onPrimaryContainer,
-    secondary: Go.secondary,
-    onSecondary: Go.onSecondary,
-    secondaryContainer: Go.secondaryContainer,
-    onSecondaryContainer: Go.onSecondaryContainer,
-    tertiary: Go.tertiary,
-    onTertiary: Go.onTertiary,
-    tertiaryContainer: Go.tertiaryContainer,
-    onTertiaryContainer: Go.onTertiaryContainer,
-    surface: Go.surface,
-    onSurface: Go.onSurface,
-    surfaceContainerHighest: Go.surface2,
-    outline: Go.outline,
-    outlineVariant: Go.surfaceVariant,
-    error: Go.error,
-    onError: Go.onDanger,
+    primary: pal.primary,
+    onPrimary: pal.onPrimary,
+    primaryContainer: pal.primary95,
+    onPrimaryContainer: pal.onPrimaryContainer,
+    secondary: pal.secondary,
+    onSecondary: pal.onSecondary,
+    secondaryContainer: pal.secondaryContainer,
+    onSecondaryContainer: pal.onSecondaryContainer,
+    tertiary: pal.tertiary,
+    onTertiary: pal.onTertiary,
+    tertiaryContainer: pal.tertiaryContainer,
+    onTertiaryContainer: pal.onTertiaryContainer,
+    error: pal.error,
+    onError: pal.onDanger,
+    surface: pal.surface,
+    onSurface: pal.onSurface,
+    surfaceContainerHighest: pal.surface2,
+    onSurfaceVariant: pal.onSurface2,
+    outline: pal.outline,
+    outlineVariant: pal.surfaceVariant,
+    shadow: const Color(0xFF000000),
+    scrim: pal.scrim,
+    inverseSurface: pal.onSurface,
+    onInverseSurface: pal.surface,
+    inversePrimary: pal.primary20,
   );
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
-    scaffoldBackgroundColor: Go.bg,
+    scaffoldBackgroundColor: pal.bg,
     splashFactory: InkRipple.splashFactory,
-    appBarTheme: const AppBarTheme(
-      backgroundColor: Go.surfaceRaised,
+    extensions: [pal],
+    appBarTheme: AppBarTheme(
+      backgroundColor: pal.surfaceRaised,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      foregroundColor: Go.onSurface,
+      foregroundColor: pal.onSurface,
       centerTitle: false,
     ),
     cardTheme: CardThemeData(
-      color: Go.surface,
+      color: pal.surface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Go.rLg)),
     ),
-    dividerColor: Go.outline,
-    dividerTheme: const DividerThemeData(color: Go.outline, thickness: 0.5, space: 0.5),
-    textTheme: const TextTheme(
-      bodyMedium: TextStyle(fontSize: Go.fsBodySm, height: Go.lhNormal, color: Go.onSurface),
-      bodyLarge: TextStyle(fontSize: Go.fsBody, height: Go.lhNormal, color: Go.onSurface),
-      titleMedium: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface),
-      titleSmall: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: Go.onSurface),
-      labelMedium: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
-      labelSmall: TextStyle(fontSize: Go.fsCap, color: Go.onSurface3),
+    dividerColor: pal.outline,
+    dividerTheme: DividerThemeData(color: pal.outline, thickness: 0.5, space: 0.5),
+    textTheme: TextTheme(
+      bodyMedium: TextStyle(fontSize: Go.fsBodySm, height: Go.lhNormal, color: pal.onSurface),
+      bodyLarge: TextStyle(fontSize: Go.fsBody, height: Go.lhNormal, color: pal.onSurface),
+      titleMedium: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: pal.onSurface),
+      titleSmall: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: pal.onSurface),
+      labelMedium: TextStyle(fontSize: Go.fsMeta, color: pal.onSurface3),
+      labelSmall: TextStyle(fontSize: Go.fsCap, color: pal.onSurface3),
     ),
     bottomNavigationBarTheme: const BottomNavigationBarThemeData(
       backgroundColor: Colors.transparent,
@@ -95,4 +78,7 @@ ThemeData buildDarkTheme() => _buildTheme(Brightness.dark);
 extension GoColorExt on BuildContext {
   ColorScheme get go => Theme.of(this).colorScheme;
   bool get isDark => Theme.of(this).brightness == Brightness.dark;
+
+  /// 当前主题色板（等价于 `GoPalette.of(context)`）。
+  GoPalette get gp => GoPalette.of(this);
 }

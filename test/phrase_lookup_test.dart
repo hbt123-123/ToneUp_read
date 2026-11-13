@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/article_screen.dart';
+import 'package:toneup_read/features/reading/screens/article_screen.dart';
 import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/http_service.dart';
 

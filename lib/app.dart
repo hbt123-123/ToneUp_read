@@ -6,11 +6,9 @@ import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/update_controller.dart';
 import 'package:toneup_read/widgets/bottom_nav.dart';
 import 'package:toneup_read/widgets/go_update_sheet.dart';
-import 'package:toneup_read/screens/home_screen.dart';
-import 'package:toneup_read/screens/vocab_screen.dart';
-import 'package:toneup_read/screens/sentence_screen.dart';
+import 'package:toneup_read/features/home/screens/home_screen.dart';
+import 'package:toneup_read/features/favorites/screens/favorites_screen.dart';
 import 'package:toneup_read/screens/mine_screen.dart';
-import 'package:toneup_read/screens/article_screen.dart';
 
 class MyApp extends ConsumerStatefulWidget {
   const MyApp({super.key});
@@ -19,11 +17,10 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class _MyAppState extends ConsumerState<MyApp> {
-  // Tab 顺序对齐 BottomNav：首页 / 词汇 / 句子 / 我的
+  // Tab 顺序对齐 BottomNav：首页 / 收藏 / 我的
   static const _tabs = <Widget>[
     HomeScreen(),
-    VocabScreen(),
-    SentenceScreen(),
+    FavoritesScreen(),
     MineScreen(),
   ];
 
@@ -44,9 +41,6 @@ class _MyAppState extends ConsumerState<MyApp> {
           bottomNavigationBar: BottomNav(currentIndex: index, onTap: (i) => ref.read(tabIndexProvider.notifier).set(i)),
         ),
       ),
-      routes: {
-        '/article': (c) => const ArticleScreen(),
-      },
     );
   }
 }

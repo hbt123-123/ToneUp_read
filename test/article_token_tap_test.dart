@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/article_screen.dart';
+import 'package:toneup_read/features/reading/screens/article_screen.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 
 import 'fake_db.dart';
@@ -160,7 +160,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, Go.primary, reason: '选词模式应已开启');
+    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, GoPalette.dark.primary, reason: '选词模式应已开启');
 
     final first = _paragraphs(tester).first;
 

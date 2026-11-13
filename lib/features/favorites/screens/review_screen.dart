@@ -1,11 +1,12 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 复习页：1:1 对齐 legacy/src/pages/review/review.vue
+/// 复习页：不再是底部一级入口，只从「收藏 → 待复习」卡片进入。
 class ReviewScreen extends ConsumerStatefulWidget {
   const ReviewScreen({super.key});
   @override
@@ -78,6 +79,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     final card = _card;
     return GoPage(
       topPad: false,
@@ -88,8 +90,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
           GoAppBar(
             title: '复习',
             style: GoAppBarStyle.floating,
-            leading: GoBack(),
-            actions: [Text('${_cards.length} 张', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))],
+            leading: const GoBack(),
+            actions: [Text('${_cards.length} 张', style: TextStyle(fontSize: Go.fsMeta, color: g.onSurface3))],
           ),
           Expanded(
             child: card != null
@@ -103,25 +105,28 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             child: Container(
                               width: double.infinity,
                               padding: const EdgeInsets.all(Go.sp10),
-                              decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rXl), boxShadow: Go.elev2),
+                              decoration: BoxDecoration(color: g.surface, borderRadius: BorderRadius.circular(Go.rXl), boxShadow: g.elev2),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text('${card['head']}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w700, color: Go.onSurface)),
+                                  Text('${card['head']}', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700, color: g.onSurface)),
                                   const SizedBox(height: Go.sp6),
                                   if (_revealed)
                                     Column(
                                       children: [
-                                        if ('${card['zh']}'.isNotEmpty) Text('${card['zh']}', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
+                                        if ('${card['zh']}'.isNotEmpty)
+                                          Text('${card['zh']}', textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBody, color: g.onSurface)),
                                         if ('${card['sentence']}'.isNotEmpty)
                                           Padding(
                                             padding: const EdgeInsets.only(top: Go.sp3),
-                                            child: Text('“${card['sentence']}”', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: 1.6, fontStyle: FontStyle.italic)),
+                                            child: Text('“${card['sentence']}”',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(fontSize: Go.fsBodySm, color: g.onSurface3, height: 1.6, fontStyle: FontStyle.italic)),
                                           ),
                                       ],
                                     )
                                   else
-                                    const Text('点击显示释义', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3)),
+                                    Text('点击显示释义', style: TextStyle(fontSize: Go.fsBodySm, color: g.onSurface3)),
                                 ],
                               ),
                             ),
@@ -134,7 +139,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             const SizedBox(width: Go.sp3),
                             _grade('模糊', const Color(0xFFE08A2B), () => _answer(2)),
                             const SizedBox(width: Go.sp3),
-                            _grade('记得', Go.primary, () => _answer(3)),
+                            _grade('记得', g.primary, () => _answer(3)),
                             const SizedBox(width: Go.sp3),
                             _grade('轻松', const Color(0xFF2D9E63), () => _answer(4)),
                           ],

@@ -23,6 +23,8 @@ IconData goIcon(String name) {
       return Icons.menu_book_outlined; // 词汇本
     case 'sentence':
       return Icons.format_quote; // 句子收藏
+    case 'favorites':
+      return Icons.bookmarks_outlined; // 收藏（单词 + 句子）
     case 'mine':
       return Icons.person_outline;
 
@@ -53,6 +55,10 @@ IconData goIcon(String name) {
       return Icons.star_border; // 收藏/见闻
     case 'settings':
       return Icons.settings_outlined;
+    case 'moon':
+      return Icons.dark_mode_outlined;
+    case 'sun':
+      return Icons.light_mode_outlined;
     case 'search':
       return Icons.search;
     case 'refresh':
@@ -121,7 +127,7 @@ class GoIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final icon = Icon(goIcon(name), size: size, color: color ?? Go.onSurface2);
+    final icon = Icon(goIcon(name), size: size, color: color ?? GoPalette.of(context).onSurface2);
     if (!spin) return icon;
     return _Spin(child: icon);
   }

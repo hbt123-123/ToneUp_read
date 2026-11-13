@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/vocab_screen.dart';
+import 'package:toneup_read/features/favorites/screens/favorites_screen.dart';
 import 'package:toneup_read/services/db_service.dart';
 
 /// 统计各表查询次数，不触碰 sqflite。
@@ -37,13 +37,13 @@ void main() {
     final db = CountingDb();
     await tester.pumpWidget(ProviderScope(
       overrides: [dbProvider.overrideWithValue(db)],
-      child: const MaterialApp(home: VocabScreen()),
+      child: const MaterialApp(home: FavoritesScreen()),
     ));
     await _settle(tester);
 
     // 词汇页只在自己是当前 Tab 时才监听信号，先切到该Tab 还原真实场景。
-    final container = ProviderScope.containerOf(tester.element(find.byType(VocabScreen)));
-    container.read(tabIndexProvider.notifier).set(1); // 词汇现在是 1 号 Tab
+    final container = ProviderScope.containerOf(tester.element(find.byType(FavoritesScreen)));
+    container.read(tabIndexProvider.notifier).set(1); // 收藏现在是 1 号 Tab
     await _settle(tester);
 
     final before = db.vocabQueries;
@@ -60,12 +60,12 @@ void main() {
     final db = CountingDb();
     await tester.pumpWidget(ProviderScope(
       overrides: [dbProvider.overrideWithValue(db)],
-      child: const MaterialApp(home: VocabScreen()),
+      child: const MaterialApp(home: FavoritesScreen()),
     ));
     await _settle(tester);
 
-    final container = ProviderScope.containerOf(tester.element(find.byType(VocabScreen)));
-    // 词汇页是第 2 个 Tab（index 1）。单测里它被直接挂载，等价于「不在该 Tab 上」。
+    final container = ProviderScope.containerOf(tester.element(find.byType(FavoritesScreen)));
+    // 收藏页是第 2 个 Tab（index 1）。单测里它被直接挂载，等价于「不在该 Tab 上」。
     expect(container.read(tabIndexProvider), isNot(1));
 
     final hiddenBefore = db.vocabQueries;

@@ -47,7 +47,7 @@ class ThemeModeNotifier extends Notifier<bool> {
 
 final themeModeProvider = NotifierProvider<ThemeModeNotifier, bool>(ThemeModeNotifier.new);
 
-/// 当前底部 Tab 索引（0 首页 / 1 词汇 / 2 句子 / 3 我的）。
+/// 当前底部 Tab 索引（0 首页 / 1 收藏 / 2 我的）。
 class TabIndexNotifier extends Notifier<int> {
   @override
   int build() => 0;

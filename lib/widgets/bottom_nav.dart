@@ -5,8 +5,8 @@ import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 底部 TabBar，逐项对齐原 `BottomNav.vue`：
-/// 4 个 Tab（首页/词汇/句子/我的），玻璃底 + 圆角胶囊，选中态 primary95 底、主色图标与文字。
+/// 底部 TabBar：3 个一级入口（首页 / 收藏 / 我的），玻璃底 + 圆角胶囊。
+/// 收藏承载单词与句子（原「词汇」「句子」两个 Tab 已合并）。
 class BottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -14,13 +14,13 @@ class BottomNav extends StatelessWidget {
 
   static const _tabs = [
     (key: 'home', text: '首页'),
-    (key: 'words', text: '词汇'),
-    (key: 'sentence', text: '句子'),
+    (key: 'favorites', text: '收藏'),
     (key: 'mine', text: '我的'),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final g = GoPalette.of(context);
     final bottom = MediaQuery.of(context).padding.bottom;
     // 必须显式给定高度：否则 Row 内的子项在不受限高度下会撑满整屏，
     // 导致 Scaffold 的 bottomNavigationBar 占满全高、body 被挤成 0（内容整体消失）。
@@ -32,9 +32,9 @@ class BottomNav extends StatelessWidget {
           child: Container(
             padding: EdgeInsets.only(left: Go.sp4, right: Go.sp4, top: Go.sp2, bottom: Go.sp2 + bottom),
             decoration: BoxDecoration(
-              color: Go.surfaceRaised.withValues(alpha: 0.9),
-              border: const Border(top: BorderSide(color: Go.outline, width: 0.5)),
-              boxShadow: Go.navShadow,
+              color: g.surfaceRaised.withValues(alpha: 0.9),
+              border: Border(top: BorderSide(color: g.outline, width: 0.5)),
+              boxShadow: g.navShadow,
             ),
             child: Row(
               children: [
@@ -43,7 +43,7 @@ class BottomNav extends StatelessWidget {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => onTap(i),
-                      child: Center(child: _pill(_tabs[i].key, _tabs[i].text, currentIndex == i)),
+                      child: Center(child: _pill(_tabs[i].key, _tabs[i].text, currentIndex == i, g)),
                     ),
                   ),
               ],
@@ -54,19 +54,19 @@ class BottomNav extends StatelessWidget {
     );
   }
 
-  Widget _pill(String key, String text, bool on) {
+  Widget _pill(String key, String text, bool on, GoPalette g) {
     final pill = AnimatedContainer(
       duration: const Duration(milliseconds: 240),
       height: Go.r(64),
       padding: const EdgeInsets.symmetric(horizontal: Go.sp5),
       decoration: BoxDecoration(
-        color: on ? Go.primary95 : Colors.transparent,
+        color: on ? g.primary95 : Colors.transparent,
         borderRadius: BorderRadius.circular(Go.rFull),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          GoIcon(key, size: Go.r(40), color: on ? Go.primary : Go.onSurface3),
+          GoIcon(key, size: Go.r(40), color: on ? g.primary : g.onSurface3),
           const SizedBox(width: Go.sp2),
           Text(
             text,
@@ -74,12 +74,12 @@ class BottomNav extends StatelessWidget {
               fontSize: Go.fsMeta,
               height: 1.2,
               fontWeight: on ? FontWeight.w600 : FontWeight.w500,
-              color: on ? Go.primary : Go.onSurface3,
+              color: on ? g.primary : g.onSurface3,
             ),
           ),
         ],
       ),
     );
-    return on ? GoGlowPulse(color: Go.primary, child: pill) : pill;
+    return on ? GoGlowPulse(color: g.primary, child: pill) : pill;
   }
 }

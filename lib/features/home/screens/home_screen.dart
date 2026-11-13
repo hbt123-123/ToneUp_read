@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:toneup_read/features/home/widgets/article_card.dart';
+import 'package:toneup_read/features/home/widgets/home_notice.dart';
+import 'package:toneup_read/features/home/widgets/source_rail.dart';
+import 'package:toneup_read/features/reading/screens/article_screen.dart';
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/screens/article_screen.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
-import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 首页（时文阅读）：云端文章列表卡片流。
@@ -276,7 +278,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         'source': r['source'],
         'url': '${r['sourceUrl'] ?? r['guid'] ?? ''}',
         'word_count': r['wordCount'],
-        // 本地列存毫秒；接口 items 的 published_at 是秒，_dateOf 里统一归一。
+        // 本地列存毫秒；接口 items 的 published_at 是秒，卡片里统一归一。
         'published_at': r['publishedAt'],
       };
 
@@ -311,7 +313,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         context,
         MaterialPageRoute(
           // 传英文原标题：阅读器内标题要参与点词/TTS（中文标题会让词内 recognizer 失效），
-          // 为空时由 _applyRow 从库里兜底。
+          // 为空时由阅读器从库里兜底。
           builder: (_) => ArticleScreen(articleId: target, title: (it['title'] ?? '').toString().trim()),
         ),
       );
@@ -326,34 +328,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  void _goMine() => ref.read(tabIndexProvider.notifier).set(3);
-
-  // =====================================================================
-  // 展示辅助
-  // =====================================================================
-
-  /// 接口返回秒、本地列存毫秒：小于 1e11 视作秒，统一成毫秒后 .toLocal()。
-  DateTime? _dateOf(Object? v) {
-    if (v is! num) return null;
-    var ms = v.toInt();
-    if (ms <= 0) return null;
-    if (ms < 100000000000) ms *= 1000;
-    return DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
-  }
-
-  String _two(int n) => n < 10 ? '0$n' : '$n';
+  void _goMine() => ref.read(tabIndexProvider.notifier).set(2);
 
   /// 面向用户的错误文案：AppException 自带中文 message，其它回落通用提示。
   String _errOf(Object e) => e is AppException ? (e.message) : '加载失败，请稍后重试';
-
-  String _metaOf(Map<String, dynamic> it) {
-    final parts = <String>[];
-    final wc = it['word_count'];
-    if (wc is num && wc > 0) parts.add('${wc.toInt()} 词');
-    final d = _dateOf(it['published_at']);
-    if (d != null) parts.add('${_two(d.month)}-${_two(d.day)}');
-    return parts.isEmpty ? '—' : parts.join(' · ');
-  }
 
   // =====================================================================
   // 视图
@@ -382,9 +360,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   GoIconBtn(icon: 'mine', onTap: _goMine),
                 ],
               ),
-              if (_noKey) _keyBanner(),
-              if (_offline) _offlineBanner(),
-              _sourceRail(),
+              if (_noKey) const HomeKeyBanner(),
+              if (_offline) HomeOfflineBanner(onRetry: _loadFirst),
+              HomeSourceRail(sources: _sources, selected: _source, onPick: _pickSource),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () => _loadFirst(),
@@ -393,7 +371,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ],
           ),
-          if (_opening) _openingOverlay(),
+          if (_opening) const HomeOpeningOverlay(),
         ],
       ),
     );
@@ -404,121 +382,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_items.isEmpty && _error.isNotEmpty) return _errorList();
     if (_items.isEmpty) return _emptyList();
     return _list();
-  }
-
-  /// 未内置文章接口密钥时的提示横幅（正常发布版不会出现）。
-  Widget _keyBanner() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
-      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp4, Go.sp3),
-      decoration: BoxDecoration(
-        color: Go.primary90,
-        borderRadius: BorderRadius.circular(Go.rMd),
-        border: Border.all(color: Go.primary.withValues(alpha: 0.45), width: 0.5),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          GoIcon('settings', size: 16, color: Go.primary),
-          SizedBox(width: Go.sp3),
-          Expanded(
-            child: Text(
-              '本应用未内置文章接口密钥，暂时无法加载文章',
-              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 离线兜底横幅。
-  Widget _offlineBanner() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
-      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp3, Go.sp3),
-      decoration: BoxDecoration(
-        color: Go.warning.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(Go.rMd),
-        border: Border.all(color: Go.warning.withValues(alpha: 0.32), width: 0.5),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const GoIcon('warning', size: 16, color: Go.onWarning),
-          const SizedBox(width: Go.sp3),
-          const Expanded(
-            child: Text(
-              '网络不可用，显示已缓存',
-              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
-            ),
-          ),
-          const SizedBox(width: Go.sp3),
-          GestureDetector(
-            onTap: _loadFirst,
-            behavior: HitTestBehavior.opaque,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: Go.sp2, vertical: Go.sp1),
-              child: Text(
-                '重试',
-                style: TextStyle(
-                  fontSize: Go.fsMeta,
-                  fontWeight: FontWeight.w700,
-                  color: Go.primary,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 来源 chips：「全部」+ 由累计 items 汇总的 source。
-  Widget _sourceRail() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _chip('全部', _source == null, () => _pickSource(null)),
-          for (final s in _sources) ...[
-            const SizedBox(width: Go.sp2),
-            _chip(s, _source == s, () => _pickSource(s)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _chip(String label, bool on, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
-        decoration: BoxDecoration(
-          color: on ? Go.primary : Go.glassBg,
-          borderRadius: BorderRadius.circular(Go.rFull),
-          border: on ? null : Border.all(color: Go.glassBorder, width: 0.5),
-          boxShadow: Go.elev1,
-        ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: Go.r(320)),
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: Go.fsBodySm,
-              fontWeight: FontWeight.w600,
-              color: on ? Go.onPrimary : Go.onSurface2,
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _skeletonList() {
@@ -593,7 +456,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
       itemCount: _items.length + footer,
       itemBuilder: (context, i) {
-        if (i < _items.length) return _articleCard(_items[i]);
+        if (i < _items.length) {
+          final it = _items[i];
+          final en = (it['title'] ?? '').toString().trim();
+          final url = '${it['url'] ?? ''}';
+          return HomeArticleCard(
+            item: it,
+            zhTitle: en.isEmpty ? null : _zh[en],
+            cached: url.isNotEmpty && _cached.contains(url),
+            onTap: () => _openItem(it),
+          );
+        }
         if (_loadingMore) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: Go.sp6),
@@ -603,182 +476,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         return GestureDetector(
           onTap: _loadMore,
           behavior: HitTestBehavior.opaque,
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: Go.sp5),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: Go.sp5),
             child: Text(
               '加载更多',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Go.primary,
-                fontSize: Go.fsBodySm,
-                fontWeight: FontWeight.w600,
-              ),
+              style: TextStyle(color: GoPalette.of(context).primary, fontSize: Go.fsBodySm, fontWeight: FontWeight.w600),
             ),
           ),
         );
       },
-    );
-  }
-
-  /// 文章卡片：中文标题 / 英文标题 / 元信息 + 右侧 source 胶囊与「已缓存」小标。
-  Widget _articleCard(Map<String, dynamic> it) {
-    final en = (it['title'] ?? '').toString().trim();
-    final zh = en.isEmpty ? null : _zh[en];
-    final zhText = (zh == null || zh.trim().isEmpty) ? (en.isEmpty ? '未命名文章' : en) : zh.trim();
-    // 没拿到中文时首行已经是英文，第二行不再重复展示。
-    final showEn = zh != null && zh.trim().isNotEmpty && en.isNotEmpty;
-    final url = '${it['url'] ?? ''}';
-    final cached = url.isNotEmpty && _cached.contains(url);
-    final source = (it['source'] ?? '').toString().trim();
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: Go.sp3),
-      child: Stack(
-        children: [
-          Positioned(
-            left: 0,
-            top: 4,
-            bottom: 4,
-            child: Container(
-              width: 3,
-              decoration: BoxDecoration(
-                color: Go.primary,
-                borderRadius: BorderRadius.circular(Go.rFull),
-              ),
-            ),
-          ),
-          GoCard(
-            // 列表项关掉毛玻璃：滚动列表里几十个 BackdropFilter 会持续重建模糊层，
-            // 而卡片底色本身接近不透明，视觉上看不出差别。
-            blur: false,
-            padding: const EdgeInsets.fromLTRB(Go.sp3, Go.sp5, Go.sp4, Go.sp5),
-            onTap: () => _openItem(it),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        zhText,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: Go.fsH2,
-                          fontWeight: FontWeight.w600,
-                          height: Go.lhSnug,
-                          color: Go.onSurface,
-                        ),
-                      ),
-                      if (showEn) ...[
-                        const SizedBox(height: Go.sp2),
-                        Text(
-                          en,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: Go.fsBodySm,
-                            height: Go.lhSnug,
-                            color: Go.onSurface3,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: Go.sp3),
-                      Text(
-                        _metaOf(it),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: Go.sp3),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (source.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
-                        decoration: BoxDecoration(
-                          color: Go.primary90,
-                          borderRadius: BorderRadius.circular(Go.rFull),
-                          border: Border.all(color: Go.primary.withValues(alpha: 0.35), width: 0.5),
-                        ),
-                        child: Text(
-                          source,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: Go.fsCap,
-                            fontWeight: FontWeight.w600,
-                            color: Go.primary,
-                          ),
-                        ),
-                      ),
-                    if (cached) ...[
-                      const SizedBox(height: Go.sp2),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
-                        decoration: BoxDecoration(
-                          color: Go.success.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(Go.rFull),
-                          border: Border.all(
-                            color: Go.success.withValues(alpha: 0.40),
-                            width: 0.5,
-                          ),
-                        ),
-                        child: const Text(
-                          '已缓存',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: Go.fsCap,
-                            fontWeight: FontWeight.w600,
-                            color: Go.success,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 缓存正文时的全屏遮罩。
-  Widget _openingOverlay() {
-    return Container(
-      color: Go.scrim,
-      alignment: Alignment.center,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: Go.sp10, vertical: Go.sp8),
-        decoration: BoxDecoration(
-          color: Go.surfaceRaised,
-          borderRadius: BorderRadius.circular(Go.rLg),
-          boxShadow: Go.shadow3,
-        ),
-        child: const Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PolySpinner(),
-            SizedBox(height: Go.sp4),
-            Text(
-              '缓存正文…',
-              style: TextStyle(
-                fontSize: Go.fsBodySm,
-                color: Go.onSurface2,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
