@@ -62,9 +62,10 @@ class DbService {
         await runScript(db, _indexes);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        // 老库升级：先补 v6/v7 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
+        // 老库升级：先补 v6/v7/v8 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
         if (oldVersion < 6) await _migrateV6(db);
         if (oldVersion < 7) await _migrateV7(db);
+        if (oldVersion < 8) await _migrateV8(db);
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
     );
@@ -172,6 +173,14 @@ class DbService {
     });
   }
 
+  /// v7 → v8：articles 补「AI 全文总结」缓存列（阅读器「总结全文」的结果落库，
+  /// 重复打开秒出；属缓存性质，clearCache 清 articles 时随之清空）。
+  Future<void> _migrateV8(Database db) async {
+    await _addColumnsIfMissing(db, 'articles', const <String, String>{
+      'ai_summary': 'TEXT',
+    });
+  }
+
   /// 清空「全部数据」= 文章/词典缓存 + 词汇三表。
   Future<void> clearAll() async {
     await _withWriteLock(() async {
@@ -234,6 +243,13 @@ class DbService {
     args.add(id);
     await execute('UPDATE articles SET ${sets.join(', ')} WHERE id = ?', args);
   }
+
+  /// AI 全文总结缓存：只写总结文本。与 saveCurated 同款 execute 直写
+  /// （低频写入，无需走 _withWriteLock）。
+  Future<void> saveAiSummary(int id, String summary) async {
+    if (id <= 0) return;
+    await execute('UPDATE articles SET ai_summary = ? WHERE id = ?', [summary, id]);
+  }
 }
 
 const String _schema = '''
@@ -245,7 +261,8 @@ CREATE TABLE IF NOT EXISTS articles (
   remoteId INTEGER, source TEXT, summary TEXT,
   publishedAt INTEGER, expiresAt INTEGER, status TEXT,
   aiVerdict TEXT, remoteFetchedAt INTEGER, cachedAt INTEGER,
-  lastOpenedAt INTEGER, lastPara INTEGER, readProgress REAL
+  lastOpenedAt INTEGER, lastPara INTEGER, readProgress REAL,
+  ai_summary TEXT
 );
 CREATE TABLE IF NOT EXISTS word_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,4 +322,4 @@ const List<String> dbIndexStatements = [
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 7;
+const int _dbVersion = 8;

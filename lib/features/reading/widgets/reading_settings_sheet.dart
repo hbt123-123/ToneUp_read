@@ -2,19 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_config_service.dart';
+import 'package:toneup_read/services/reader_fonts.dart';
 import 'package:toneup_read/services/tts_voices.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 
 /// 语速档位：与 AppConfigService.setTts 的 clamp(0.7, 1.3) 对齐。
 const List<double> kReadingTtsSpeeds = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3];
 
-/// 顶栏下的内联阅读设置面板：外观 / 字号 / 行距 / 朗读音色。
+/// 顶栏下的内联阅读设置面板：外观 / 字体 / 字号 / 行距 / 段距 / 朗读音色。
+/// 所有改动走 appConfig.setReader，notify 后同帧生效，不重载文章。
 class ReadingSettingsPanel extends StatelessWidget {
   final AppConfigService cfg;
   final GoReaderPalette pal;
   final ValueChanged<String> onTheme;
   final ValueChanged<int> onFontStep;
   final ValueChanged<double> onLineStep;
+  final ValueChanged<String> onFontFamily;
+  final ValueChanged<double> onParaStep;
   final VoidCallback onOpenVoice;
   final String voiceLabel;
 
@@ -25,6 +29,8 @@ class ReadingSettingsPanel extends StatelessWidget {
     required this.onTheme,
     required this.onFontStep,
     required this.onLineStep,
+    required this.onFontFamily,
+    required this.onParaStep,
     required this.onOpenVoice,
     required this.voiceLabel,
   });
@@ -41,6 +47,12 @@ class ReadingSettingsPanel extends StatelessWidget {
             const SizedBox(width: Go.sp3),
             _themeChip('纸色', cfg.readerTheme == 'paper', () => onTheme('paper')),
           ])),
+          _row('字体', Row(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < kReaderFonts.length; i++) ...[
+              if (i > 0) const SizedBox(width: Go.sp3),
+              _themeChip(kReaderFonts[i][1], cfg.readerFont == kReaderFonts[i].first, () => onFontFamily(kReaderFonts[i].first)),
+            ],
+          ])),
           _row('字号', Row(mainAxisSize: MainAxisSize.min, children: [
             _step('A−', () => onFontStep(-1)),
             SizedBox(width: Go.r(80), child: Text(cfg.fontSize.toStringAsFixed(0), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
@@ -50,6 +62,11 @@ class ReadingSettingsPanel extends StatelessWidget {
             _step('−', () => onLineStep(-0.1)),
             SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
             _step('＋', () => onLineStep(0.1)),
+          ])),
+          _row('段距', Row(mainAxisSize: MainAxisSize.min, children: [
+            _step('−', () => onParaStep(-2)),
+            SizedBox(width: Go.r(80), child: Text(cfg.paraSpacing.toStringAsFixed(0), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
+            _step('＋', () => onParaStep(2)),
           ])),
           _row(
             '朗读音色',

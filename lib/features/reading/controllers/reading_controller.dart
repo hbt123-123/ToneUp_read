@@ -8,7 +8,9 @@ import 'package:toneup_read/features/reading/models/reading_state.dart';
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/db_service.dart';
+import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/app_exception.dart';
+import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/services/tts_service.dart';
 
 /// 阅读器状态与交互的核心：
@@ -67,7 +69,7 @@ class ReadingController extends ChangeNotifier {
       final db = _ref.read(dbProvider);
       // 不取 html：阅读器只用 plainText/blocks；source/publishedAt 等云端元信息供页头展示。
       const cols =
-          'id, title, sourceUrl, wordCount, plainText, blocks, source, publishedAt, expiresAt, cachedAt, status, summary, remoteId';
+          'id, title, sourceUrl, wordCount, plainText, blocks, source, publishedAt, expiresAt, cachedAt, status, summary, remoteId, ai_summary AS aiSummary';
       Map<String, dynamic>? row;
       if (state.articleId != 0) {
         row = await _first(db, 'SELECT $cols FROM articles WHERE id = ?', [state.articleId]);
@@ -106,6 +108,7 @@ class ReadingController extends ChangeNotifier {
     state.publishedAt = (row['publishedAt'] as num?)?.toInt();
     state.cachedAt = (row['cachedAt'] as num?)?.toInt();
     state.wordCount = row['wordCount'] as int? ?? 0;
+    state.aiSummary = row['aiSummary'] as String? ?? '';
     if (state.title.isEmpty) state.title = row['title'] as String? ?? '';
     List<ArticleBlock> bs = [];
     final raw = row['blocks'] as String?;
@@ -346,6 +349,49 @@ class ReadingController extends ChangeNotifier {
       if (s.isNotEmpty) return s;
     }
     return fallback;
+  }
+
+  // ================= 沉浸模式 =================
+
+  /// 顶栏/设置面板显隐：点正文空白处切换（词内点击不受影响）。
+  /// 选区条与朗读胶囊是活动 UI，不随沉浸隐藏。
+  bool chromeVisible = true;
+
+  void toggleChrome() {
+    chromeVisible = !chromeVisible;
+    _notify();
+  }
+
+  // ================= AI 总结 =================
+  bool summarizing = false;
+
+  /// AI 总结全文，结果缓存进 articles.ai_summary（重复打开秒出）。
+  /// 正文缺失 / 未入库时抛 AppException，由 UI 层提示。
+  Future<String> summarizeArticle() async {
+    if (state.plain.trim().isEmpty) throw AppException('noBody', '这篇文章没有正文，无法总结');
+    if (state.articleId == 0) throw AppException('noId', '文章尚未入库，无法保存总结');
+    summarizing = true;
+    _notify();
+    try {
+      const sys = '你是英语文章助教。用中文总结用户给出的英语文章：'
+          '第一行一句话核心主旨；随后 3-5 条要点，每条以「·」开头单独成行；'
+          '最后一行给出难度评级（格式：难度：A2/B1/B2/C1/C2 之一）。'
+          '不要 Markdown、不要序号、不要空行。';
+      final user = '文章标题：${state.title}\n\n${LlmService.clipArticle(state.plain)}';
+      final out = await _ref
+          .read(llmProvider)
+          .chat(sys, user, model: AppConfigService.defaultGatewayAnalysisModel, temperature: 0.3);
+      final text = out.trim();
+      if (_disposed) return text;
+      state.aiSummary = text;
+      await _db.saveAiSummary(state.articleId, text);
+      return text;
+    } finally {
+      if (!_disposed) {
+        summarizing = false;
+        _notify();
+      }
+    }
   }
 
   // ================= 图片重试 =================

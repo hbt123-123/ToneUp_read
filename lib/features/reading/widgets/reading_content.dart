@@ -11,9 +11,18 @@ import 'package:toneup_read/theme/go_tokens.dart';
 class ReadingCover extends StatelessWidget {
   final ReadingController controller;
   final GoReaderPalette pal;
-  final void Function(int ti, bool isLong) onTitleToken;
 
-  const ReadingCover({super.key, required this.controller, required this.pal, required this.onTitleToken});
+  /// 正文/标题字体（阅读设置的 kReaderFonts id，空串 = 系统默认）。
+  final String fontFamily;
+  final void Function(int ti, bool isLong, Rect? rect) onTitleToken;
+
+  const ReadingCover({
+    super.key,
+    required this.controller,
+    required this.pal,
+    this.fontFamily = '',
+    required this.onTitleToken,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +43,7 @@ class ReadingCover extends StatelessWidget {
             _TitleText(
               toks: toks,
               color: pal.ink,
+              fontFamily: fontFamily,
               onTok: onTitleToken,
             ),
           const SizedBox(height: Go.sp3),
@@ -73,8 +83,16 @@ class ReadingContent extends StatelessWidget {
   final double fontSize;
   final double lineHeight;
 
-  /// 点中某个 token（pi = -1 表示标题）。
-  final void Function(int pi, int ti, bool isLong) onToken;
+  /// 正文字体（阅读设置 id，空串 = 系统默认）与段间距（dp）。
+  /// 即时生效：appConfig notify → 本 widget 重建，不重载文章、不动滚动位置。
+  final String fontFamily;
+  final double paraSpacing;
+
+  /// 点中某个 token（pi = -1 表示标题）；[rect] 为词的屏幕包围盒（见 ReadingParagraph.onTok）。
+  final void Function(int pi, int ti, bool isLong, Rect? rect) onToken;
+
+  /// 点在正文空白/标点上（非长按）：阅读页切换沉浸模式。
+  final VoidCallback onEmptyTap;
 
   const ReadingContent({
     super.key,
@@ -82,7 +100,10 @@ class ReadingContent extends StatelessWidget {
     required this.pal,
     required this.fontSize,
     required this.lineHeight,
+    required this.fontFamily,
+    required this.paraSpacing,
     required this.onToken,
+    required this.onEmptyTap,
   });
 
   @override
@@ -111,7 +132,8 @@ class ReadingContent extends StatelessWidget {
           ReadingCover(
             controller: controller,
             pal: pal,
-            onTitleToken: (ti, isLong) => onToken(-1, ti, isLong),
+            fontFamily: fontFamily,
+            onTitleToken: (ti, isLong, rect) => onToken(-1, ti, isLong, rect),
           ),
           // 标题块与正文之间用一条短分隔线收住视线（纸色/夜读都适用）。
           Padding(
@@ -124,7 +146,13 @@ class ReadingContent extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp8, Go.sp6, 0),
             child: DefaultTextStyle(
-              style: TextStyle(fontSize: fontSize, height: lineHeight, color: pal.ink),
+              style: TextStyle(
+                fontSize: fontSize,
+                height: lineHeight,
+                // 空串 = 系统默认，不设 fontFamily。
+                fontFamily: fontFamily.isEmpty ? null : fontFamily,
+                color: pal.ink,
+              ),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
             ),
           ),
@@ -142,8 +170,8 @@ class ReadingContent extends StatelessWidget {
     final starts = controller.startsAt(pi);
     return Container(
       key: controller.paraKey(pi),
-      // 段距从 10dp 加宽到 18dp：长文阅读的段落呼吸感。
-      margin: const EdgeInsets.only(bottom: 18),
+      // 段距由阅读设置驱动（默认 18dp，长文阅读的段落呼吸感）。
+      margin: EdgeInsets.only(bottom: paraSpacing),
       child: GestureDetector(
         onLongPress: () => controller.onParaLongPress(pi),
         child: ReadingParagraph(
@@ -158,7 +186,8 @@ class ReadingContent extends StatelessWidget {
           segs: controller.segs,
           segVer: controller.ttsSegVer,
           segBg: pal.accent.withValues(alpha: 0.14),
-          onTok: (ti, isLong) => onToken(pi, ti, isLong),
+          onTok: (ti, isLong, rect) => onToken(pi, ti, isLong, rect),
+          onEmptyTap: onEmptyTap,
           onEmptyLongPress: () => controller.onParaLongPress(pi),
         ),
       ),
@@ -198,12 +227,17 @@ class ReadingContent extends StatelessWidget {
 /// 点击/长按仍按 token 命中：共用一个 `TapGestureRecognizer`，拿到字符偏移后二分定位 token（同 ReadingParagraph）。
 class _TitleText extends StatefulWidget {
   final List<ReadingToken> toks;
-  final void Function(int ti, bool isLong) onTok;
+
+  /// 点中某个词；[rect] 为该词的屏幕包围盒（同 ReadingParagraph.onTok）。
+  final void Function(int ti, bool isLong, Rect? rect) onTok;
 
   /// 标题 ink（默认沿用深色 token；阅读页换肤时传入）。
   final Color color;
 
-  const _TitleText({required this.toks, required this.onTok, this.color = const Color(0xFFECE9F5)});
+  /// 字体 id（阅读设置，空串 = 系统默认）。
+  final String fontFamily;
+
+  const _TitleText({required this.toks, required this.onTok, this.color = const Color(0xFFECE9F5), this.fontFamily = ''});
 
   @override
   State<_TitleText> createState() => _TitleTextState();
@@ -215,7 +249,7 @@ class _TitleTextState extends State<_TitleText> {
   late List<int> _starts;
 
   TextStyle get _style => TextStyle(
-        fontFamily: Go.fontRead,
+        fontFamily: Go.titleFont(widget.fontFamily),
         fontWeight: FontWeight.w700,
         fontSize: Go.fsDisplay,
         height: Go.lhTight,
@@ -262,7 +296,28 @@ class _TitleTextState extends State<_TitleText> {
       }
     }
     if (ti < 0 || ti >= widget.toks.length || !widget.toks[ti].word) return;
-    widget.onTok(ti, isLong);
+    widget.onTok(ti, isLong, _wordRect(ro, global, ti));
+  }
+
+  /// 点击词的屏幕包围盒（同 ReadingParagraph._wordRect；标题无缩进，偏移从 0 起）。
+  Rect? _wordRect(RenderParagraph ro, Offset global, int ti) {
+    try {
+      final boxes = ro.getBoxesForSelection(TextSelection(baseOffset: _starts[ti], extentOffset: _starts[ti] + widget.toks[ti].text.length));
+      if (boxes.isEmpty) return null;
+      final local = ro.globalToLocal(global);
+      var pick = boxes.first;
+      for (final b in boxes) {
+        final r = b.toRect();
+        if (local.dy >= r.top && local.dy <= r.bottom) {
+          pick = b;
+          break;
+        }
+      }
+      final rect = pick.toRect();
+      return ro.localToGlobal(rect.topLeft) & rect.size;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

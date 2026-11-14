@@ -12,8 +12,12 @@ class Go {
   static double r(num rpx) => rpx * 0.5;
 
   // ================= 字体 =================
-  static const fontRead = 'Songti SC'; // 阅读正文衬线（回退到系统衬线）
   static const fontMono = 'monospace';
+
+  /// 标题字体：跟随正文字体选择（`reader_fonts.dart` 的 kReaderFonts id）；
+  /// 未选时给衬线（Android 上落到 Noto Serif）。取代 iOS 专属的 'Songti SC'——
+  /// 它在 Android 上不存在，一直静默回落系统默认。
+  static String titleFont(String readerFont) => readerFont.isNotEmpty ? readerFont : 'serif';
 
   // ================= 字号 (rpx→dp) =================
   static const fsDisplay = 20.0; // 40

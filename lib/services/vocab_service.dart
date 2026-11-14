@@ -206,6 +206,21 @@ class VocabService {
     return true;
   }
 
+  /// 读缓存的分析结果（没有或未解析过则 null）。阅读器句子面板先查缓存再打网关，
+  /// 收藏页也可复用，避免已拆解过的句子重复消耗 LLM 额度。
+  Future<Map<String, dynamic>?> getSentenceAnalysis(String sentence) async {
+    final rows = await _db.select('SELECT analysis FROM vocab_sentence WHERE sentence = ?', [sentence.trim()]);
+    if (rows.isEmpty) return null;
+    final raw = rows.first['analysis'] as String?;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final v = jsonDecode(raw);
+      return v is Map ? Map<String, dynamic>.from(v) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 对收藏句子做语法/语块拆解。结果 upsert 进 vocab_sentence（先 INSERT 保底新句、再 UPDATE 覆盖已有句的 analysis，
   /// 不破坏 saveSentence 写入的 articleGuid 等元数据）。
   Future<Map<String, dynamic>> analyzeSentence(String sentence) async {

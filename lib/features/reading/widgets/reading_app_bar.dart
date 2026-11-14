@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 阅读器顶栏：返回 / 多选 / 朗读 / AI 精选 / 阅读设置。
+/// 阅读器顶栏：返回 / 多选 / 朗读 / AI 菜单（精选+总结）/ 阅读设置。
 class ReadingAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
   final GoReaderPalette pal;
@@ -12,7 +12,7 @@ class ReadingAppBar extends StatelessWidget implements PreferredSizeWidget {
   final bool settingsOpen;
   final VoidCallback onToggleSelect;
   final VoidCallback onToggleTts;
-  final VoidCallback onCurate;
+  final VoidCallback onAi;
   final VoidCallback onToggleSettings;
 
   const ReadingAppBar({
@@ -25,7 +25,7 @@ class ReadingAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.settingsOpen,
     required this.onToggleSelect,
     required this.onToggleTts,
-    required this.onCurate,
+    required this.onAi,
     required this.onToggleSettings,
   });
 
@@ -45,7 +45,7 @@ class ReadingAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         GoIconBtn(icon: 'menu', onTap: onToggleSelect, color: selectMode ? pal.accent : pal.secondary),
         GoIconBtn(icon: ttsBusy ? 'stop' : 'tts', onTap: onToggleTts, color: ttsBusy ? pal.accent : pal.secondary),
-        GoIconBtn(icon: 'sparkle', onTap: onCurate, color: useCurated ? pal.accent : pal.secondary),
+        GoIconBtn(icon: 'sparkle', onTap: onAi, color: useCurated ? pal.accent : pal.secondary),
         GoIconBtn(icon: 'settings', onTap: onToggleSettings, color: settingsOpen ? pal.accent : pal.secondary),
       ],
     );

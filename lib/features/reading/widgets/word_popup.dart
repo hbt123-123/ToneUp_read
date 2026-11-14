@@ -1,7 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:toneup_read/features/reading/widgets/word_card_data.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
@@ -95,32 +94,19 @@ class _WordCardSheetState extends ConsumerState<WordCardSheet> {
     }
   }
 
-  /// 解析 `wordProvider.lookup` 的返回：
-  /// `kind=dict` → 结构化词卡；`kind=text` → 纯文本译文；解析失败（旧缓存裸文本）→ 原样展示。
+  /// 解析 `wordProvider.lookup` 的返回（结构化词卡 / 纯文本 / 旧缓存裸文本统一走
+  /// [parseLookup]，与就地浮窗共用同一份解析）。
   void _applyResult(String raw) {
-    try {
-      final v = jsonDecode(raw);
-      if (v is Map) {
-        final m = Map<String, dynamic>.from(v);
-        final kind = '${m['kind'] ?? ''}';
-        if (kind == 'dict') {
-          setState(() => _card = m);
-          return;
-        }
-        if (kind == 'text') {
-          final t = '${m['text'] ?? ''}'.trim();
-          if (t.isEmpty) {
-            setState(() => _error = '未获取到释义，请重试');
-          } else {
-            setState(() => _text = t);
-          }
-          return;
-        }
-      }
-    } catch (_) {
-      // 旧缓存里存的是裸文本：当纯文本卡片降级展示。
+    final p = parseLookup(raw);
+    if (p.card != null) {
+      setState(() => _card = p.card);
+      return;
     }
-    setState(() => _text = raw.trim());
+    if (p.text.isEmpty) {
+      setState(() => _error = '未获取到释义，请重试');
+    } else {
+      setState(() => _text = p.text);
+    }
   }
 
   /// 底部「加入生词库」：用当前阅读上下文记录出现位置，随后刷新词汇页。

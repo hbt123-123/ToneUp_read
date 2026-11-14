@@ -20,7 +20,9 @@ class LlmService {
   }
 
   /// 走翻译网关（OpenAI 兼容）的一次对话调用。
-  Future<String> chat(String system, String user, {double temperature = 0.7}) async {
+  /// [model] 传空时用配置的默认模型；总结/长难句解析等理解型任务传
+  /// `AppConfigService.defaultGatewayAnalysisModel`（网关透传 SiliconFlow 的 model 参数）。
+  Future<String> chat(String system, String user, {double temperature = 0.7, String? model}) async {
     final key = _cfg.gatewayKey.trim();
     if (key.isEmpty) {
       throw AppException(
@@ -29,8 +31,9 @@ class LlmService {
       );
     }
     final url = '${_cfg.gatewayBase}/v1/chat/completions';
+    final m = (model != null && model.trim().isNotEmpty) ? model.trim() : _cfg.gatewayModel;
     final body = {
-      'model': _cfg.gatewayModel,
+      'model': m,
       'messages': [
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': user},
@@ -80,8 +83,8 @@ class LlmService {
     return e;
   }
 
-  Future<dynamic> structured(String system, String user, {double temperature = 0.3}) async {
-    final raw = await chat(system, '$user\n只输出 JSON，不要任何解释或 Markdown 代码块。', temperature: temperature);
+  Future<dynamic> structured(String system, String user, {double temperature = 0.3, String? model}) async {
+    final raw = await chat(system, '$user\n只输出 JSON，不要任何解释或 Markdown 代码块。', temperature: temperature, model: model);
     return _decode(raw);
   }
 

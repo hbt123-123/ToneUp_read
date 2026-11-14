@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'reader_fonts.dart';
 import 'tts_voices.dart';
 
 class AppConfigService extends ChangeNotifier {
@@ -13,6 +14,10 @@ class AppConfigService extends ChangeNotifier {
   // 阅读设置（对齐 store.reader）
   double _fontSize = 18;
   double _lineHeight = 1.8;
+
+  /// 正文字体（kReaderFonts 的 id，空串 = 系统默认）与段间距（dp）。
+  String _readerFont = kReaderDefaultFont;
+  double _paraSpacing = 18;
 
   /// 阅读页配色：`night` 低眩光深色 / `paper` 暖纸色。
   String _readerTheme = 'night';
@@ -32,6 +37,11 @@ class AppConfigService extends ChangeNotifier {
   static const defaultArticleApiBase = 'https://read.tu.lztfirefly.top';
   static const defaultGatewayBase = 'https://gateway.lztfirefly.top';
   static const defaultGatewayModel = 'tencent/Hunyuan-MT-7B';
+
+  /// 总结/长难句解析这类「理解型」任务的模型（源码常量，不进 setRemote/prefs）。
+  /// 默认模型混元 MT-7B 是翻译特化模型，做总结与语法拆解偏弱；
+  /// 网关 `/v1/chat/completions` 支持在请求体里透传任意 SiliconFlow 的 model。
+  static const defaultGatewayAnalysisModel = 'Qwen/Qwen3-8B';
 
   /// 构建时注入：`--dart-define=ARTICLE_API_KEY=xxx` / `--dart-define=GATEWAY_KEY=xxx`。
   /// 未注入时为空串，App 取不到云端数据——这是源码裸构建的预期行为。
@@ -53,6 +63,8 @@ class AppConfigService extends ChangeNotifier {
   bool get darkMode => _darkMode;
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
+  String get readerFont => _readerFont;
+  double get paraSpacing => _paraSpacing;
   String get readerTheme => _readerTheme;
   String get ttsVoice => _ttsVoice;
   double get ttsSpeed => _ttsSpeed;
@@ -100,6 +112,8 @@ class AppConfigService extends ChangeNotifier {
     _darkMode = _prefs!.getBool('dark_mode') ?? true;
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
+    _readerFont = normalizeReaderFont(_prefs!.getString('reader_font'));
+    _paraSpacing = (_prefs!.getDouble('reader_paraSpacing') ?? 18).clamp(10.0, 32.0);
     _readerTheme = _prefs!.getString('reader_theme') ?? 'night';
     // 老用户本地存的是网关音色 id（alex/bella…），这里归一成 Edge 音色，否则合成必然失败。
     _ttsVoice = normalizeEdgeVoice(_prefs!.getString('tts_voice'));
@@ -148,7 +162,7 @@ class AppConfigService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setReader({double? fontSize, double? lineHeight, String? theme}) async {
+  Future<void> setReader({double? fontSize, double? lineHeight, String? font, double? paraSpacing, String? theme}) async {
     if (fontSize != null) {
       _fontSize = fontSize;
       await _prefs!.setDouble('reader_fontSize', fontSize);
@@ -156,6 +170,15 @@ class AppConfigService extends ChangeNotifier {
     if (lineHeight != null) {
       _lineHeight = lineHeight;
       await _prefs!.setDouble('reader_lineHeight', lineHeight);
+    }
+    if (font != null) {
+      // 允许传空串（回到系统默认），但要归一成合法 id。
+      _readerFont = normalizeReaderFont(font);
+      await _prefs!.setString('reader_font', _readerFont);
+    }
+    if (paraSpacing != null) {
+      _paraSpacing = paraSpacing.clamp(10.0, 32.0);
+      await _prefs!.setDouble('reader_paraSpacing', _paraSpacing);
     }
     if (theme != null && theme.isNotEmpty) {
       _readerTheme = theme;
