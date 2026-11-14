@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:toneup_read/features/favorites/screens/review_screen.dart';
 import 'package:toneup_read/features/favorites/widgets/sentence_card.dart';
 import 'package:toneup_read/features/favorites/widgets/word_card.dart';
 import 'package:toneup_read/features/favorites/widgets/word_occurrence_sheet.dart';
@@ -18,9 +17,8 @@ import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 收藏（原「词汇」+「句子」合并）：轻量管理单词与句子收藏。
 ///
-/// - 单词：全部/单词/短语筛选、出处回原文、删除、清空、导出（半角逗号分隔）。
-/// - 句子：翻译/朗读/复制/回到原文/LLM 拆解。
-/// - 复习不再是底部一级入口，只保留顶部「待复习」卡片作为二级入口。
+/// - 单词：搜索、全部/单词/短语筛选、发音、出处回原文、删除、清空、导出（半角逗号分隔）。
+/// - 句子：搜索、翻译（结果落库）/朗读/复制/回到原文/LLM 拆解/删除。
 class FavoritesScreen extends ConsumerStatefulWidget {
   const FavoritesScreen({super.key});
   @override
@@ -34,7 +32,8 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
   int _segment = _tabWords;
   List<Map<String, dynamic>> _heads = [];
   String _mode = 'all';
-  int _dueCount = 0;
+  final TextEditingController _searchCtl = TextEditingController();
+  String _query = '';
   Map<String, dynamic>? _occ;
   List<Map<String, dynamic>> _sentences = [];
   Timer? _reloadTimer;
@@ -52,6 +51,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
   @override
   void dispose() {
     _reloadTimer?.cancel();
+    _searchCtl.dispose();
     super.dispose();
   }
 
@@ -65,20 +65,36 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     });
   }
 
-  List<Map<String, dynamic>> get _filtered =>
-      _mode == 'all' ? _heads : _heads.where((h) => h['kind'] == _mode).toList();
+  /// 词：先按 全部/单词/短语 筛 kind，再按搜索词匹配 head/zh。
+  List<Map<String, dynamic>> get _filtered {
+    final kind = _mode == 'all' ? _heads : _heads.where((h) => h['kind'] == _mode);
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return kind.toList();
+    return kind.where((h) {
+      final head = '${h['head']}'.toLowerCase();
+      final zh = '${h['zh'] ?? ''}'.toLowerCase();
+      return head.contains(q) || zh.contains(q);
+    }).toList();
+  }
+
+  /// 句：搜索词匹配原句与文章标题。
+  List<Map<String, dynamic>> get _filteredSentences {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _sentences;
+    return _sentences.where((s) {
+      final text = '${s['sentence'] ?? ''}'.toLowerCase();
+      final title = '${s['articleTitle'] ?? ''}'.toLowerCase();
+      return text.contains(q) || title.contains(q);
+    }).toList();
+  }
 
   Future<void> _loadWords() async {
     try {
       final svc = ref.read(vocabProvider);
       await svc.syncHeadsFromCache();
       final heads = await svc.getHeads();
-      final due = await svc.dueCount();
       if (!mounted) return;
-      setState(() {
-        _heads = heads;
-        _dueCount = due;
-      });
+      setState(() => _heads = heads);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('收藏加载失败: $e')));
     }
@@ -92,7 +108,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         try {
           if (s['analysis'] != null) analysis = jsonDecode(s['analysis'] as String);
         } catch (_) {}
-        return {...s, '_analysis': analysis, '_analyzing': false, '_translating': false, '_trans': null, '_transErr': null};
+        return {...s, '_analysis': analysis, '_analyzing': false, '_translating': false, '_trans': (s['translation'] as String?) ?? null, '_transErr': null};
       }).toList();
       if (!mounted) return;
       setState(() => _sentences = rows);
@@ -127,19 +143,14 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     setState(() {
       _heads = _heads.where((x) => x['head'] != h['head']).toList();
     });
-    _dueCount = await ref.read(vocabProvider).dueCount();
-    if (mounted) setState(() {});
   }
 
   Future<void> _clearAll() async {
-    final ok = await _confirm('清空词汇', '确定删除全部收藏词汇与复习进度？');
+    final ok = await _confirm('清空词汇', '确定删除全部收藏单词？');
     if (ok != true) return;
     await ref.read(vocabProvider).clearVocab();
     if (!mounted) return;
-    setState(() {
-      _heads = [];
-      _dueCount = 0;
-    });
+    setState(() => _heads = []);
   }
 
   Future<bool?> _confirm(String title, String content) {
@@ -173,6 +184,10 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         s['_translating'] = false;
         s['_trans'] = out;
       });
+      // 译文落库：重启收藏页直接显示，不再重复请求网关。落库失败不影响本次展示。
+      try {
+        await ref.read(vocabProvider).saveTranslation(text, out);
+      } catch (_) {}
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -186,6 +201,10 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     final text = '${s['sentence'] ?? ''}';
     if (text.trim().isEmpty) return;
     ref.read(ttsProvider).speak(text);
+  }
+
+  void _onSpeakWord(Map<String, dynamic> h) {
+    ref.read(ttsProvider).speak('${h['head']}');
   }
 
   Future<void> _copy(String text, String tip) async {
@@ -203,6 +222,16 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         builder: (_) => ArticleScreen(guid: guid, focusPara: (s['paraIndex'] as int?) ?? -1, focusTok: (s['tokIndex'] as int?) ?? -1),
       ),
     );
+  }
+
+  Future<void> _removeSentence(Map<String, dynamic> s) async {
+    final id = s['id'] as int?;
+    if (id == null) return;
+    final ok = await _confirm('删除句子', '从收藏里移除这句句子？');
+    if (ok != true) return;
+    await ref.read(vocabProvider).removeSentence(id);
+    if (!mounted) return;
+    setState(() => _sentences = _sentences.where((x) => x['id'] != id).toList());
   }
 
   Future<void> _onAnalyze(Map<String, dynamic> s) async {
@@ -330,7 +359,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         });
       }
     }
-    final empty = _segment == _tabWords ? _filtered.isEmpty : _sentences.isEmpty;
+    final empty = _segment == _tabWords ? _filtered.isEmpty : _filteredSentences.isEmpty;
     return GoPage(
       topPad: false,
       globe: true,
@@ -341,6 +370,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
             children: [
               _appbar(),
               _segmentBar(),
+              _searchBar(),
               Expanded(child: _segment == _tabWords ? _wordsScroll() : _sentencesScroll()),
             ],
           ),
@@ -410,24 +440,50 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     );
   }
 
+  /// 收藏搜索：数据已全量在内存，纯本地过滤，无需防抖。
+  Widget _searchBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp3),
+        child: Row(
+          children: [
+            Expanded(
+              child: GoField(
+                controller: _searchCtl,
+                hint: _segment == _tabWords ? '搜索单词 / 释义' : '搜索句子 / 来源',
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            if (_query.isNotEmpty) GoIconBtn(icon: 'close', onTap: _clearQuery),
+          ],
+        ),
+      );
+
+  void _clearQuery() {
+    _searchCtl.clear();
+    setState(() => _query = '');
+  }
+
+  /// 空态：区分「还没有收藏」与「搜索无结果」。
+  Widget _emptyView({required String icon, required String title, required String desc}) {
+    final q = _query.trim();
+    if (q.isEmpty) return GoEmpty(icon: icon, title: title, desc: desc);
+    return GoEmpty(icon: 'search', title: '未找到「$q」', desc: '换个关键词试试');
+  }
+
   /// 词卡量大（可达数千），用 SliverList 懒构建；早先把全部词卡塞进 Column，
   /// 进页面一次性构建三万个 Widget，首屏直接卡住。
   Widget _wordsScroll() {
     final items = _filtered;
     return CustomScrollView(
       slivers: [
-        SliverToBoxAdapter(child: _dueCard()),
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp2),
-            child: Text('${_heads.length} 个词族', style: TextStyle(fontSize: Go.fsMeta, color: GoPalette.of(context).onSurface3)),
+            child: Text('${items.length} 个词族', style: TextStyle(fontSize: Go.fsMeta, color: GoPalette.of(context).onSurface3)),
           ),
         ),
         SliverToBoxAdapter(child: _modeTabs()),
         if (items.isEmpty)
-          const SliverToBoxAdapter(
-            child: GoEmpty(icon: 'book', title: '还没有收藏的词汇', desc: '在正文里点词即可沉淀到这里'),
-          )
+          SliverToBoxAdapter(child: _emptyView(icon: 'book', title: '还没有收藏的词汇', desc: '在正文里点词即可沉淀到这里'))
         else
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
@@ -436,32 +492,13 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
               itemBuilder: (context, i) => FavoriteWordCard(
                 head: items[i],
                 onTap: () => _openOcc(items[i]),
+                onSpeak: () => _onSpeakWord(items[i]),
                 onRemove: () => _remove(items[i]),
               ),
             ),
           ),
         const SliverToBoxAdapter(child: SizedBox(height: Go.sp16)),
       ],
-    );
-  }
-
-  Widget _dueCard() {
-    final g = GoPalette.of(context);
-    return GestureDetector(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReviewScreen())),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
-        padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp5),
-        decoration: BoxDecoration(color: g.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: g.elev1),
-        child: Row(
-          children: [
-            Text('$_dueCount', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: g.primary)),
-            Padding(padding: const EdgeInsets.only(left: Go.sp2), child: Text('张待复习', style: TextStyle(fontSize: Go.fsBodySm, color: g.onSurface))),
-            const Spacer(),
-            Text('去复习 ›', style: TextStyle(fontSize: Go.fsBodySm, color: g.primary, fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
     );
   }
 
@@ -493,8 +530,9 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
 
   /// 收藏句子最多 200 条（getSentences 内 LIMIT），直接单列铺开即可。
   Widget _sentencesScroll() {
-    if (_sentences.isEmpty) {
-      return const GoEmpty(icon: 'reading', title: '还没有收藏的句子', desc: '在正文里点词，原句会自动沉淀到这里');
+    final items = _filteredSentences;
+    if (items.isEmpty) {
+      return _emptyView(icon: 'reading', title: '还没有收藏的句子', desc: '在正文里点词，原句会自动沉淀到这里');
     }
     return SingleChildScrollView(
       child: Column(
@@ -502,13 +540,13 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp2),
-            child: Text('${_sentences.length} 个收藏句子', style: TextStyle(fontSize: Go.fsMeta, color: GoPalette.of(context).onSurface3)),
+            child: Text('${items.length} 个收藏句子', style: TextStyle(fontSize: Go.fsMeta, color: GoPalette.of(context).onSurface3)),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp8),
             child: Column(
               children: [
-                for (final s in _sentences)
+                for (final s in items)
                   FavoriteSentenceCard(
                     sentence: s,
                     onTranslate: () => _onTranslate(s),
@@ -517,6 +555,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                     onOpenArticle: () => _goArticleFromSentence(s),
                     onAnalyze: () => _onAnalyze(s),
                     onCopyTranslation: (t) => _copy(t, '已复制译文'),
+                    onRemove: () => _removeSentence(s),
                   ),
               ],
             ),

@@ -66,6 +66,7 @@ class DbService {
         if (oldVersion < 6) await _migrateV6(db);
         if (oldVersion < 7) await _migrateV7(db);
         if (oldVersion < 8) await _migrateV8(db);
+        if (oldVersion < 9) await _migrateV9(db);
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
     );
@@ -181,6 +182,17 @@ class DbService {
     });
   }
 
+  /// v8 → v9：vocab_sentence 补「整句翻译」缓存列（收藏页点「翻译」的结果落库，
+  /// 重启后译文直接显示，不再重复请求网关）。FSRS 复习随本次下线，
+  /// fsrs_* 列留在 vocab_head 不再读写（Android SQLite 不支持 DROP COLUMN），
+  /// 其专用索引一并移除。
+  Future<void> _migrateV9(Database db) async {
+    await _addColumnsIfMissing(db, 'vocab_sentence', const <String, String>{
+      'translation': 'TEXT',
+    });
+    await db.execute('DROP INDEX IF EXISTS idx_vocab_head_fsrsdue');
+  }
+
   /// 清空「全部数据」= 文章/词典缓存 + 词汇三表。
   Future<void> clearAll() async {
     await _withWriteLock(() async {
@@ -292,7 +304,7 @@ CREATE TABLE IF NOT EXISTS vocab_sentence (
   sentence TEXT UNIQUE,
   articleGuid TEXT, articleTitle TEXT, sourceLabel TEXT,
   paraIndex INTEGER, tokIndex INTEGER, at INTEGER,
-  analysis TEXT
+  analysis TEXT, translation TEXT
 );
 CREATE TABLE IF NOT EXISTS title_zh (title TEXT PRIMARY KEY, zh TEXT NOT NULL, at INTEGER)
 ''';
@@ -302,14 +314,12 @@ CREATE TABLE IF NOT EXISTS title_zh (title TEXT PRIMARY KEY, zh TEXT NOT NULL, a
 ///   （getOccurrence 看某词在哪些文章出现，按时间倒序）。用复合索引同时覆盖这两类查询，
 ///   不再需要单列 `idx_vocab_occ_lemma`，少维护一个热表（点词每次 INSERT）索引。
 /// - vocab_head(lastSeen)：词汇列表 `ORDER BY lastSeen DESC`。
-/// - vocab_head(fsrs_due)：复习页 `WHERE fsrs_due <= ? ORDER BY fsrs_due ASC`（高频打开）。
 /// - word_cache.lemma：`WHERE word = ? OR lemma = ?` 的 OR 优化需要两侧各有索引
 ///   （点查 `word+mode` 已由 schema 的 UNIQUE(word,mode) 覆盖，无需额外索引）。
 @visibleForTesting
 const List<String> dbIndexStatements = [
   'CREATE INDEX IF NOT EXISTS idx_vocab_occ_lemma_at ON vocab_occ(lemma, at)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_head_lastseen ON vocab_head(lastSeen)',
-  'CREATE INDEX IF NOT EXISTS idx_vocab_head_fsrsdue ON vocab_head(fsrs_due)',
   'CREATE INDEX IF NOT EXISTS idx_word_cache_lemma ON word_cache(lemma)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_sentence_at ON vocab_sentence(at)',
   // 云端文章缓存：离线兜底列表按 cachedAt 倒序、按 remoteId 点查/回写。
@@ -322,4 +332,4 @@ const List<String> dbIndexStatements = [
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 8;
+const int _dbVersion = 9;

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 收藏句子卡片：原句 + 来源 + 翻译/朗读/复制/回到原文/LLM 拆解 + 结果区。
+/// 收藏句子卡片：原句 + 来源 + 翻译/朗读/复制/回到原文/LLM 拆解/删除 + 结果区。
 class FavoriteSentenceCard extends StatelessWidget {
   final Map<String, dynamic> sentence;
   final VoidCallback onTranslate;
@@ -10,6 +10,7 @@ class FavoriteSentenceCard extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback onOpenArticle;
   final VoidCallback onAnalyze;
+  final VoidCallback onRemove;
   final ValueChanged<String> onCopyTranslation;
 
   const FavoriteSentenceCard({
@@ -20,6 +21,7 @@ class FavoriteSentenceCard extends StatelessWidget {
     required this.onCopy,
     required this.onOpenArticle,
     required this.onAnalyze,
+    required this.onRemove,
     required this.onCopyTranslation,
   });
 
@@ -54,6 +56,7 @@ class FavoriteSentenceCard extends StatelessWidget {
                 _miniBtn(g, '复制', onCopy),
                 _miniBtn(g, '回到原文', onOpenArticle),
                 _miniBtn(g, sentence['_analyzing'] == true ? '拆解中…' : (analysis != null ? '重新拆解' : 'LLM 拆解'), onAnalyze, ai: true),
+                _miniBtn(g, '删除', onRemove, danger: true),
               ],
             ),
           ),
@@ -95,12 +98,13 @@ class FavoriteSentenceCard extends StatelessWidget {
     );
   }
 
-  Widget _miniBtn(GoPalette g, String label, VoidCallback onTap, {bool ai = false}) => GestureDetector(
+  Widget _miniBtn(GoPalette g, String label, VoidCallback onTap, {bool ai = false, bool danger = false}) => GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp1),
-          decoration: BoxDecoration(border: Border.all(color: ai ? g.primary : g.outline), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? g.primary : g.onSurface2)),
+          decoration: BoxDecoration(
+              border: Border.all(color: ai ? g.primary : (danger ? g.danger : g.outline)), borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? g.primary : (danger ? g.danger : g.onSurface2))),
         ),
       );
 

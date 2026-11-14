@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
+import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 收藏词卡：词条 + 出现次数/来源数角标 + 中文释义 + 最近原句。
+/// 收藏词卡：词条 + 音标/中文释义 + 出现次数/来源数角标 + 最近原句；发音 + 删除。
 class FavoriteWordCard extends StatelessWidget {
   final Map<String, dynamic> head;
   final VoidCallback onTap;
+  final VoidCallback onSpeak;
   final VoidCallback onRemove;
 
-  const FavoriteWordCard({super.key, required this.head, required this.onTap, required this.onRemove});
+  const FavoriteWordCard({super.key, required this.head, required this.onTap, required this.onSpeak, required this.onRemove});
 
   @override
   Widget build(BuildContext context) {
     final g = GoPalette.of(context);
     final zh = head['zh'];
+    final phonetic = '${head['phonetic'] ?? ''}';
     final latest = '${head['latestSentence'] ?? ''}';
     return GestureDetector(
       onTap: onTap,
@@ -45,7 +48,17 @@ class FavoriteWordCard extends StatelessWidget {
                   if (zh != null && '$zh'.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text('$zh', style: TextStyle(fontSize: Go.fsBodySm, color: g.onSurface)),
+                      child: Row(
+                        children: [
+                          if (phonetic.isNotEmpty) ...[
+                            Text(phonetic, style: TextStyle(fontSize: Go.fsMeta, color: g.onSurface3)),
+                            const SizedBox(width: Go.sp2),
+                          ],
+                          Expanded(
+                            child: Text('$zh', style: TextStyle(fontSize: Go.fsBodySm, color: g.onSurface)),
+                          ),
+                        ],
+                      ),
                     ),
                   if (latest.isNotEmpty)
                     Padding(
@@ -56,6 +69,7 @@ class FavoriteWordCard extends StatelessWidget {
                 ],
               ),
             ),
+            GoIconBtn(icon: 'tts', onTap: onSpeak, color: g.primary),
             GestureDetector(
               onTap: onRemove,
               child: Padding(

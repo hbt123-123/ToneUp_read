@@ -20,19 +20,16 @@ class VocabService {
     if (id == 0) return; // 该位置已记录过
     final rows = await _db.select('SELECT head FROM vocab_head WHERE head = ?', [lemma]);
     if (rows.isEmpty) {
-      await _db.execute(
-          'INSERT INTO vocab_head (head, kind, firstSeen, lastSeen, occCount, fsrs_state, fsrs_due, fsrs_s, fsrs_d) VALUES (?,?,?,?,?,?,?,?,?)',
-          [lemma, 'word', now, now, 1, 0, now, 0.0, 0.0]);
+      await _db.execute('INSERT INTO vocab_head (head, kind, firstSeen, lastSeen, occCount) VALUES (?,?,?,?,?)',
+          [lemma, 'word', now, now, 1]);
     } else {
       await _db.execute('UPDATE vocab_head SET occCount = occCount + 1, lastSeen = ? WHERE head = ?', [now, lemma]);
     }
   }
 
-  // ================= 词汇中心（对齐 vocab.js） =================
+  // ================= 词汇中心 =================
 
-  static const _legacySpreadDays = 30;
-
-  /// 把历史 word_cache 词同步进 vocab_head（幂等），旧生词按查词时间分 30 天错峰到期。
+  /// 把历史 word_cache 词同步进 vocab_head（幂等）。
   Future<void> syncHeadsFromCache() async {
     final allHeads = await _db.select('SELECT head FROM vocab_head');
     for (final h in allHeads) {
@@ -50,28 +47,25 @@ class VocabService {
     if (clean.isEmpty) return;
     final existing = await _db.select('SELECT head FROM vocab_head');
     final have = existing.map((e) => '${e['head']}').toSet();
-    final now = DateTime.now().millisecondsSinceEpoch;
     for (final r in clean) {
       final head = ((r['lemma'] as String?)?.isNotEmpty == true ? r['lemma'] as String : '${r['word']}'.toLowerCase());
       if (head.isEmpty || have.contains(head)) continue;
       have.add(head);
-      final at = (r['at'] as int?) ?? now;
-      final days = ((at ~/ 86400000).abs()) % _legacySpreadDays;
-      final due = now + days * 86400000;
-      await _db.execute(
-          'INSERT OR IGNORE INTO vocab_head (head, kind, firstSeen, lastSeen, occCount, fsrs_state, fsrs_due, fsrs_s, fsrs_d) VALUES (?,?,?,?,?,?,?,?,?)',
-          [head, 'word', at, at, 1, 0, due, 1.0, 5.0]);
+      final at = (r['at'] as int?) ?? DateTime.now().millisecondsSinceEpoch;
+      await _db.execute('INSERT OR IGNORE INTO vocab_head (head, kind, firstSeen, lastSeen, occCount) VALUES (?,?,?,?,?)',
+          [head, 'word', at, at, 1]);
     }
   }
 
   /// 批量读取 word_cache / 其它大字段时的单批上限（规避 Android CursorWindow）。
   static const _chunk = 100;
 
-  /// 词汇列表（附带 sourceCount / latestSentence / zh）。
+  /// 词汇列表（附带 sourceCount / latestSentence / zh / phonetic）。
   Future<List<Map<String, dynamic>>> getHeads() async {
-    final list = (await _db.select('SELECT head, kind, firstSeen, lastSeen, occCount, family, fsrs_state, fsrs_due FROM vocab_head ORDER BY lastSeen DESC'))
-        .map((e) => Map<String, dynamic>.of(e))
-        .toList();
+    final list =
+        (await _db.select('SELECT head, kind, firstSeen, lastSeen, occCount, family FROM vocab_head ORDER BY lastSeen DESC'))
+            .map((e) => Map<String, dynamic>.of(e))
+            .toList();
     // vocab_occ 会随阅读持续增长，整表拉取会逼近 CursorWindow；这里只要两个聚合量，
     // 结果行数由「词条数」决定而不是「出现次数」。
     // 注：SQLite 在聚合查询里对裸列（sentence）的取值来自 max(at) 命中的那一行，这是
@@ -109,6 +103,7 @@ class VocabService {
           final r = jsonDecode(hit['result'] as String);
           if (r is Map) {
             if (r['kind'] == 'dict') {
+              h['phonetic'] = '${r['phonetic'] ?? ''}';
               final senses = r['senses'] as List?;
               h['zh'] = (senses != null && senses.isNotEmpty && senses.first is Map) ? (senses.first['definition'] ?? '') : '';
             } else if (r['text'] != null) {
@@ -129,63 +124,24 @@ class VocabService {
         .toList();
   }
 
-  /// 页面要显示具体数字，且 fsrs_due 有索引，走的是索引内计数。
-  Future<int> dueCount() async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final rows = await _db.select('SELECT COUNT(*) AS n FROM vocab_head WHERE fsrs_due <= ?', [now]);
-    return (rows.isEmpty ? 0 : (rows.first['n'] as int? ?? 0));
-  }
-
   /// 句子表只用于「最近句子」展示，排序后截断即可。
   static const _sentenceLimit = 200;
 
   Future<List<Map<String, dynamic>>> getSentences() async {
-    return (await _db.select('SELECT sentence, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, at, analysis FROM vocab_sentence ORDER BY at DESC LIMIT $_sentenceLimit'))
+    return (await _db.select(
+            'SELECT id, sentence, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, at, analysis, translation FROM vocab_sentence ORDER BY at DESC LIMIT $_sentenceLimit'))
         .map((e) => Map<String, dynamic>.of(e))
         .toList();
-  }
-
-  Future<List<Map<String, dynamic>>> getDueCards(int limit) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    return _db.select('SELECT head, fsrs_state, fsrs_due, fsrs_s, fsrs_d FROM vocab_head WHERE fsrs_due <= ? ORDER BY fsrs_due ASC LIMIT ?', [now, limit]);
-  }
-
-  /// FSRS 简化内核：以稳定性 S(天) + 难度 D(1..10) 驱动间隔。grade: 1忘了 2模糊 3记得 4轻松。
-  Future<void> scheduleReview(String head, int grade) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final rows = await _db.select('SELECT fsrs_s, fsrs_d, fsrs_state FROM vocab_head WHERE head = ?', [head]);
-    if (rows.isEmpty) return;
-    var s = (rows.first['fsrs_s'] as num?)?.toDouble() ?? 1.0;
-    var d = (rows.first['fsrs_d'] as num?)?.toDouble() ?? 5.0;
-    switch (grade) {
-      case 1:
-        s = 1.0;
-        d = (d + 1).clamp(1, 10).toDouble();
-        break;
-      case 2:
-        s = s * 1.2;
-        d = (d + 0.5).clamp(1, 10).toDouble();
-        break;
-      case 3:
-        s = s * 2.3;
-        break;
-      case 4:
-        s = s * 3.0;
-        d = (d - 0.5).clamp(1, 10).toDouble();
-        break;
-    }
-    final due = now + s.round() * 86400000;
-    // 首刷判定：vocab_head.fsrs_s 永远是数字（建表 DEFAULT 0 + 写入时给值），
-    // 不能用它判「是否首次复习」；正确依据是 fsrs_state==0（新词尚未评级）。
-    final curState = (rows.first['fsrs_state'] as int?) ?? 0;
-    final state = (grade >= 3) ? (curState == 0 ? 1 : 2) : 0;
-    await _db.execute('UPDATE vocab_head SET fsrs_state = ?, fsrs_due = ?, fsrs_s = ?, fsrs_d = ?, lastSeen = ? WHERE head = ?',
-        [state, due, s, d, now, head]);
   }
 
   Future<void> removeHead(String head) async {
     await _db.execute('DELETE FROM vocab_head WHERE head = ?', [head]);
     await _db.execute('DELETE FROM vocab_occ WHERE lemma = ?', [head]);
+  }
+
+  /// 删除一条收藏句子（按 vocab_sentence.id）。
+  Future<void> removeSentence(int id) async {
+    await _db.execute('DELETE FROM vocab_sentence WHERE id = ?', [id]);
   }
 
   Future<void> clearVocab() async {
@@ -204,6 +160,13 @@ class VocabService {
       [s, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, now],
     );
     return true;
+  }
+
+  /// 整句翻译结果落库（收藏页点「翻译」成功后调用，重启后译文直接显示）。
+  Future<void> saveTranslation(String sentence, String translation) async {
+    final t = translation.trim();
+    if (t.isEmpty) return;
+    await _db.execute('UPDATE vocab_sentence SET translation = ? WHERE sentence = ?', [t, sentence.trim()]);
   }
 
   /// 读缓存的分析结果（没有或未解析过则 null）。阅读器句子面板先查缓存再打网关，
