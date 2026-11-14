@@ -235,6 +235,102 @@ class RemoteArticleService {
     return rows.map((e) => Map<String, dynamic>.of(e)).toList();
   }
 
+  /// 最近阅读（按 lastOpenedAt 倒序）：首页「继续阅读」卡数据源。
+  /// 返回 DB 行（含 lastPara / readProgress / aiVerdict），结构与 [cachedArticles] 一致。
+  Future<List<Map<String, dynamic>>> recentlyRead(int limit) async {
+    if (limit <= 0) return const [];
+    final rows = await _db.select(
+      'SELECT * FROM articles WHERE lastOpenedAt IS NOT NULL AND lastOpenedAt > 0 '
+      'ORDER BY lastOpenedAt DESC LIMIT ?',
+      [limit],
+    );
+    return rows.map((e) => Map<String, dynamic>.of(e)).toList();
+  }
+
+  /// 本地搜索：标题/摘要 LIKE。列表接口的元信息都会 UPSERT 进本地表，
+  /// 本地库即搜索索引（离线可用）；按发布时间倒序，命中上限 [limit]。
+  Future<List<Map<String, dynamic>>> searchArticles(String query, {int limit = 50}) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    // LIKE 通配符转义（sqlite ESCAPE 指定转义符）。
+    final pat = '%${q.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_')}%';
+    final rows = await _db.select(
+      "SELECT * FROM articles WHERE IFNULL(title,'') LIKE ? ESCAPE '\\' "
+      "OR IFNULL(summary,'') LIKE ? ESCAPE '\\' "
+      'ORDER BY IFNULL(publishedAt, 0) DESC LIMIT ?',
+      [pat, pat, limit],
+    );
+    return rows.map((e) => Map<String, dynamic>.of(e)).toList();
+  }
+
+  /// 从落库的 aiVerdict JSON 里取 topics 标签（小写）；缺失/解析失败返回空列表。
+  /// 列表接口不返回 topics，这是分类浏览唯一的数据来源（详情接口才有）。
+  static List<String> topicsFromVerdict(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final v = jsonDecode(raw);
+      if (v is! Map) return const [];
+      final t = v['topics'];
+      if (t is! List) return const [];
+      return [
+        for (final e in t)
+          if (e != null) e.toString().trim().toLowerCase(),
+      ].where((s) => s.isNotEmpty).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 已尝试补过 topics 的 remoteId（进程内去重）；aiVerdict 落库后靠 DB 列天然幂等。
+  final Set<int> _topicsTried = <int>{};
+
+  /// 云端列表条目补齐主题：先批量读回本地 aiVerdict（打开过的文章已有），
+  /// 缺失的静默逐个拉详情、把 ai_verdict 落库（每次最多 [maxFetch] 篇）。
+  /// 返回 remoteId → topics 标签（小写）；单条失败吞掉不打扰用户。
+  /// 列表接口不返回 topics，分类浏览全靠这里逐渐填齐。
+  Future<Map<int, List<String>>> ensureTopics(List<Map<String, dynamic>> items, {int maxFetch = 12}) async {
+    final ids = <int>{};
+    for (final it in items) {
+      final rid = it['id'] is num ? (it['id'] as num).toInt() : null;
+      if (rid != null && rid > 0) ids.add(rid);
+    }
+    final out = <int, List<String>>{};
+    if (ids.isEmpty) return out;
+    for (final chunk in chunked(ids.toList())) {
+      final ph = List.filled(chunk.length, '?').join(',');
+      try {
+        final rows = await _db.select('SELECT remoteId, aiVerdict FROM articles WHERE remoteId IN ($ph)', chunk);
+        for (final r in rows) {
+          final rid = r['remoteId'] is num ? (r['remoteId'] as num).toInt() : null;
+          final t = topicsFromVerdict(r['aiVerdict'] as String?);
+          if (rid != null && t.isNotEmpty) out[rid] = t;
+        }
+      } catch (_) {}
+    }
+    var budget = maxFetch;
+    for (final it in items) {
+      if (budget <= 0) break;
+      final rid = it['id'] is num ? (it['id'] as num).toInt() : null;
+      if (rid == null || rid <= 0 || out.containsKey(rid)) continue;
+      if (_topicsTried.contains(rid)) continue;
+      _topicsTried.add(rid);
+      budget--;
+      try {
+        final d = await detail(rid);
+        if (d == null) continue;
+        final v = d['ai_verdict'];
+        if (v == null) continue;
+        final encoded = jsonEncode(v);
+        await _db.execute('UPDATE articles SET aiVerdict = ? WHERE remoteId = ?', [encoded, rid]);
+        final t = topicsFromVerdict(encoded);
+        if (t.isNotEmpty) out[rid] = t;
+      } catch (_) {
+        // 静默失败：aiVerdict 列仍为空，下次会话会再试。
+      }
+    }
+    return out;
+  }
+
   /// 批量取标题中译：先查 `title_zh`，缺失的并发（≤3）走网关翻译并回写。
   /// 单个失败静默跳过（调用方回落英文标题）。
   Future<Map<String, String>> titleZhBatch(List<String> titles) async {

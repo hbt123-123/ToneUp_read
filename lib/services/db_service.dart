@@ -62,8 +62,9 @@ class DbService {
         await runScript(db, _indexes);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        // 老库升级：先补 v6 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
+        // 老库升级：先补 v6/v7 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
         if (oldVersion < 6) await _migrateV6(db);
+        if (oldVersion < 7) await _migrateV7(db);
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
     );
@@ -99,14 +100,36 @@ class DbService {
     return c.future;
   }
 
+  /// 幂等补列：先 `PRAGMA table_info` 看列是否存在再 ALTER，可重复执行；
+  /// 旧库若手工跑过部分迁移也不会因「列已存在」报错。
+  Future<void> _addColumnsIfMissing(Database db, String table, Map<String, String> cols) async {
+    try {
+      final info = await db.rawQuery('PRAGMA table_info($table)');
+      final have = info.map((r) => '${r['name']}').toSet();
+      for (final e in cols.entries) {
+        if (have.contains(e.key)) continue;
+        try {
+          await db.execute('ALTER TABLE $table ADD COLUMN ${e.key} ${e.value}');
+        } catch (_) {
+          // 列已存在（并发/重复迁移）等容忍；不阻断后续迁移。
+        }
+      }
+    } catch (_) {
+      // PRAGMA 失败时仍尝试逐列补，ALTER 自身的异常会被上面吞掉。
+      for (final e in cols.entries) {
+        try {
+          await db.execute('ALTER TABLE $table ADD COLUMN ${e.key} ${e.value}');
+        } catch (_) {}
+      }
+    }
+  }
+
   /// v5 → v6：articles 补列（云端元信息）+ 新建 title_zh（标题中译缓存）
   /// + DROP 云端化后废弃的旧表（feeds / 出题备考 / kv）。
   ///
-  /// 幂等：先用 `PRAGMA table_info` 看列是否存在再 ALTER，可重复执行；
-  /// 旧库若手工跑过部分迁移也不会因「列已存在」报错；DROP 一律 IF EXISTS。
   /// 时间列一律存 epoch 毫秒（接口返回的秒 ×1000）。
   Future<void> _migrateV6(Database db) async {
-    const cols = <String, String>{
+    await _addColumnsIfMissing(db, 'articles', const <String, String>{
       'remoteId': 'INTEGER',
       'source': 'TEXT',
       'summary': 'TEXT',
@@ -116,26 +139,7 @@ class DbService {
       'aiVerdict': 'TEXT',
       'remoteFetchedAt': 'INTEGER',
       'cachedAt': 'INTEGER',
-    };
-    try {
-      final info = await db.rawQuery('PRAGMA table_info(articles)');
-      final have = info.map((r) => '${r['name']}').toSet();
-      for (final e in cols.entries) {
-        if (have.contains(e.key)) continue;
-        try {
-          await db.execute('ALTER TABLE articles ADD COLUMN ${e.key} ${e.value}');
-        } catch (_) {
-          // 列已存在（并发/重复迁移）等容忍；不阻断后续迁移。
-        }
-      }
-    } catch (_) {
-      // PRAGMA 失败时仍尝试逐列补，ALTER 自身的异常会被上面吞掉。
-      for (final e in cols.entries) {
-        try {
-          await db.execute('ALTER TABLE articles ADD COLUMN ${e.key} ${e.value}');
-        } catch (_) {}
-      }
-    }
+    });
     await db.execute('CREATE TABLE IF NOT EXISTS title_zh (title TEXT PRIMARY KEY, zh TEXT NOT NULL, at INTEGER)');
 
     // 云端化后废弃的旧表：抓取/订阅（feeds、feed_items）、出题备考
@@ -155,6 +159,17 @@ class DbService {
     ]) {
       await db.execute('DROP TABLE IF EXISTS $t');
     }
+  }
+
+  /// v6 → v7：articles 补「最近阅读」三列（首页「继续阅读」卡 + 阅读器恢复定位）。
+  /// lastOpenedAt 存 epoch 毫秒；lastPara 为视口顶部段落下标（-1 = 未记录）；
+  /// readProgress 为 0..1 的粗略进度。
+  Future<void> _migrateV7(Database db) async {
+    await _addColumnsIfMissing(db, 'articles', const <String, String>{
+      'lastOpenedAt': 'INTEGER',
+      'lastPara': 'INTEGER',
+      'readProgress': 'REAL',
+    });
   }
 
   /// 清空「全部数据」= 文章/词典缓存 + 词汇三表。
@@ -196,6 +211,29 @@ class DbService {
     await execute('UPDATE articles SET curated_blocks = NULL WHERE id = ?', [id]);
     return true;
   }
+
+  /// 阅读进度：只更新传入的字段（未传的字段保持不变）。
+  /// 防抖后高频写入，execute 直写（sqflite 单连接串行执行，与 saveCurated 同款）。
+  Future<void> saveReadProgress(int id, {int? lastOpenedAt, int? lastPara, double? readProgress}) async {
+    if (id <= 0) return;
+    final sets = <String>[];
+    final args = <Object?>[];
+    if (lastOpenedAt != null) {
+      sets.add('lastOpenedAt = ?');
+      args.add(lastOpenedAt);
+    }
+    if (lastPara != null) {
+      sets.add('lastPara = ?');
+      args.add(lastPara);
+    }
+    if (readProgress != null) {
+      sets.add('readProgress = ?');
+      args.add(readProgress.clamp(0.0, 1.0));
+    }
+    if (sets.isEmpty) return;
+    args.add(id);
+    await execute('UPDATE articles SET ${sets.join(', ')} WHERE id = ?', args);
+  }
 }
 
 const String _schema = '''
@@ -206,7 +244,8 @@ CREATE TABLE IF NOT EXISTS articles (
   curated_blocks TEXT,
   remoteId INTEGER, source TEXT, summary TEXT,
   publishedAt INTEGER, expiresAt INTEGER, status TEXT,
-  aiVerdict TEXT, remoteFetchedAt INTEGER, cachedAt INTEGER
+  aiVerdict TEXT, remoteFetchedAt INTEGER, cachedAt INTEGER,
+  lastOpenedAt INTEGER, lastPara INTEGER, readProgress REAL
 );
 CREATE TABLE IF NOT EXISTS word_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,9 +298,11 @@ const List<String> dbIndexStatements = [
   // 云端文章缓存：离线兜底列表按 cachedAt 倒序、按 remoteId 点查/回写。
   'CREATE INDEX IF NOT EXISTS idx_articles_cachedat ON articles(cachedAt)',
   'CREATE INDEX IF NOT EXISTS idx_articles_remoteid ON articles(remoteId)',
+  // 首页「继续阅读」卡：最近阅读按 lastOpenedAt 倒序取一条。
+  'CREATE INDEX IF NOT EXISTS idx_articles_lastopened ON articles(lastOpenedAt)',
 ];
 
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 6;
+const int _dbVersion = 7;

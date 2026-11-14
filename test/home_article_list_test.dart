@@ -14,13 +14,14 @@ import 'package:toneup_read/services/translate_service.dart';
 
 import 'fake_db.dart';
 
-/// 首页（云端文章卡片流）渲染回归。
+/// 首页（精品阅读首页：品牌区 / 精选大卡 / 分类浏览 / 最新文章）渲染回归。
 ///
 /// - 首页有常驻动画（GoPage 的辉光 / 地球自转），**不能用 pumpAndSettle**，一律固定时长 pump。
 /// - 列表 / 中译 / 缓存标记全部走 [RemoteArticleService]，用子类假实现替换（不打网络）。
 /// - 密钥走 app_config 实际路径：SharedPreferences 明文 key + `init()` 读取
 ///   （FLUTTER_TEST 下 Keystore 不可用，`_readSecret` 回落到明文 prefs）。
 ///   没有非空 `articleApiKey` 时首页走「未配置密钥」分支，根本不调 `list()`。
+/// - 精选大卡与列表卡可能展示同一篇文章：标题用 findsWidgets（≥1）断言。
 
 const _zh1 = '气候临界点比想象更近';
 const _zh2 = '口袋太阳能的安静崛起';
@@ -49,7 +50,7 @@ const _items = <Map<String, dynamic>>[
 ];
 
 /// 只回云端列表形状的假服务：`list` / `titleZhBatch` / `cachedGuids` 覆盖真实实现，
-/// 其余（落库 / 翻译 / 网络）在这些路径里根本不会被调到。
+/// 新增的 recentlyRead / searchArticles / ensureTopics 也回空值（不打网络/DB）。
 class _FakeRemoteArticles extends RemoteArticleService {
   _FakeRemoteArticles(DbService db, AppConfigService cfg)
       : super(db, HttpService(), cfg, TranslateService(LlmService(HttpService(), cfg)));
@@ -83,6 +84,15 @@ class _FakeRemoteArticles extends RemoteArticleService {
 
   @override
   Future<Set<String>> cachedGuids() async => <String>{};
+
+  @override
+  Future<List<Map<String, dynamic>>> recentlyRead(int limit) async => const [];
+
+  @override
+  Future<List<Map<String, dynamic>>> searchArticles(String query, {int limit = 50}) async => const [];
+
+  @override
+  Future<Map<int, List<String>>> ensureTopics(List<Map<String, dynamic>> items, {int maxFetch = 12}) async => const {};
 }
 
 Future<AppConfigService> _config() async {
@@ -114,35 +124,49 @@ Future<void> _pump(WidgetTester tester, Widget app) async {
 
   await tester.pumpWidget(app);
   await tester.pump(); // 首帧：postFrameCallback 里发起 _loadFirst
-  await tester.pump(const Duration(milliseconds: 20)); // list 返回 → 卡片骨架变实体
+  await tester.pump(const Duration(milliseconds: 20)); // list 返回 → 骨架变实体
   await tester.pump(const Duration(milliseconds: 20)); // titleZhBatch 返回 → 中文标题
 }
 
 void main() {
-  testWidgets('云端列表：中文标题 / 英文标题 / source 胶囊 / 元信息都渲染', (tester) async {
+  testWidgets('精品首页：品牌区 / 精选大卡 / 分类 chips / 列表卡都渲染', (tester) async {
     final cfg = await _config();
     final fake = _FakeRemoteArticles(DbService(), cfg);
     await _pump(tester, _app(fake, cfg));
 
-    // 卡片首行中译、第二行英文（有中译时才重复展示英文）
-    expect(find.text(_zh1), findsOneWidget);
-    expect(find.text(_zh2), findsOneWidget);
-    expect(find.text(_en1), findsOneWidget);
-    expect(find.text(_en2), findsOneWidget);
+    // 品牌区（Text.rich 两段拼接，整串文本不能整体 find）+ 欢迎语。
+    expect(find.text('ToneUP'), findsOneWidget);
+    expect(find.text('·read'), findsOneWidget);
+    expect(find.text('今天读点什么'), findsOneWidget);
 
-    // source 胶囊 + 来源 chips：每个来源各出现两次（chips 行 1 + 卡片胶囊 1）
-    expect(find.text(_src1), findsNWidgets(2), reason: '来源应同时出现在筛选 chips 与卡片胶囊');
-    expect(find.text(_src2), findsNWidgets(2));
+    // 精选大卡角标（每日轮换：两篇里选一篇，但只出一张精选卡）。
+    expect(find.text('今日精选'), findsOneWidget);
 
-    // 元信息里的 word_count（published_at 归一为 MM-dd 拼在后面，用 contains 免时区差异）
-    expect(find.textContaining('1234 词'), findsOneWidget);
-    expect(find.textContaining('867 词'), findsOneWidget);
+    // 分类 chips：「全部」+ 预置分类都在（SingleChildScrollView 横向全量构建）。
+    expect(find.text('全部'), findsOneWidget);
+    expect(find.text('科技'), findsOneWidget);
+    expect(find.text('商业'), findsOneWidget);
+    expect(find.text('环境'), findsOneWidget);
+
+    // 两篇文章的中文标题：可能与精选卡重复出现，用 ≥1 断言。
+    expect(find.text(_zh1), findsWidgets);
+    expect(find.text(_zh2), findsWidgets);
+    expect(find.text(_en1), findsWidgets);
+    expect(find.text(_en2), findsWidgets);
+
+    // source：卡片胶囊（精选卡 meta 里也可能出现）。
+    expect(find.text(_src1), findsWidgets);
+    expect(find.textContaining('1234 词'), findsWidgets);
+    expect(find.textContaining('867 词'), findsWidgets);
 
     // cachedGuids() 返回空 → 不该出现「已缓存」小标
     expect(find.text('已缓存'), findsNothing);
 
+    // 「最新文章」区标题在（大写展示不影响文本查找——原样字符串是 '最新文章'）。
+    expect(find.text('最新文章'), findsOneWidget);
+
     expect(fake.listCalls, 1);
-    expect(tester.takeException(), isNull, reason: '卡片/胶囊在 480 宽下不应溢出');
+    expect(tester.takeException(), isNull, reason: '精选卡/列表卡在 480 宽下不应溢出');
   });
 
   testWidgets('下拉刷新后列表仍渲染且重新拉取第一页', (tester) async {
@@ -152,16 +176,15 @@ void main() {
     expect(fake.listCalls, 1);
 
     // RefreshIndicator + AlwaysScrollableScrollPhysics：下拉产生 overscroll → 松手触发 onRefresh
-    await tester.drag(find.byType(ListView).first, const Offset(0, 400));
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 400));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump(const Duration(milliseconds: 600));
 
     expect(fake.listCalls, greaterThanOrEqualTo(2), reason: '下拉刷新应重新调用 list(page:1)');
-    expect(find.text(_zh1), findsOneWidget, reason: '刷新完成后卡片仍渲染');
-    expect(find.text(_zh2), findsOneWidget);
-    expect(find.text(_src1), findsNWidgets(2));
+    expect(find.text(_zh1), findsWidgets, reason: '刷新完成后卡片仍渲染');
+    expect(find.text(_zh2), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 
@@ -184,8 +207,8 @@ void main() {
     );
 
     expect(tester.takeException(), isNull, reason: '大字号下不应有 RenderFlex overflow / 其它异常');
-    expect(find.text(_zh1), findsOneWidget);
-    expect(find.text(_en1), findsOneWidget);
-    expect(find.text(_src1), findsNWidgets(2));
+    expect(find.text(_zh1), findsWidgets);
+    expect(find.text(_en1), findsWidgets);
+    expect(find.text('今日精选'), findsOneWidget);
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/features/reading/models/reading_state.dart';
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
+import 'package:toneup_read/services/db_service.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/services/tts_service.dart';
 
@@ -31,10 +33,16 @@ class ReadingController extends ChangeNotifier {
     _tts = _ref.read(ttsProvider);
     _tts.playing.addListener(_onTtsChanged);
     _tts.segment.addListener(_onTtsSegment);
+    _db = _ref.read(dbProvider);
+    scrollController.addListener(_onScrollForProgress);
     load();
   }
 
   final WidgetRef _ref;
+
+  /// db 在构造时缓存：Riverpod 3 在 dispose 里禁用 ref（见文件尾注释），
+  /// 退出阅读页前还要补写一次进度，必须用缓存实例。
+  late final DbService _db;
 
   /// 需要弹 SnackBar 的轻提示（朗读失败等）；由页面注入。
   final void Function(String message)? onMessage;
@@ -115,6 +123,9 @@ class ReadingController extends ChangeNotifier {
     }
     state.blocks = bs;
     state.error = '';
+    // 「最近阅读」打卡：正文就绪立刻写 lastOpenedAt（此时段落尚未布局，
+    // _firstVisiblePara 必为 null，只会刷时间戳，不会覆盖已有 lastPara）。
+    _writeProgress();
     flashPara = focusPara;
     flashTok = focusTok;
     if (focusPara >= 0) {
@@ -368,6 +379,68 @@ class ReadingController extends ChangeNotifier {
   int flashTok = -1;
 
   GlobalKey paraKey(int pi) => _paraKeys.putIfAbsent(pi, () => GlobalKey());
+
+  // ================= 阅读进度 =================
+  // 首页「继续阅读」卡 + 重进文章恢复定位：lastOpenedAt 打开即写，
+  // lastPara/readProgress 在滚动停顿 800ms 后按「视口顶部以下第一段」落库。
+  // 精选版段号与原文不对应，精选模式下不更新段号（只刷时间戳）。
+  Timer? _progressTimer;
+
+  void _onScrollForProgress() {
+    if (_disposed) return;
+    _progressTimer?.cancel();
+    _progressTimer = Timer(const Duration(milliseconds: 800), _writeProgress);
+  }
+
+  /// 落库当前进度；拿不到渲染信息（正文未布局等）时只刷 lastOpenedAt。
+  /// dispose 里也会调用：db 用构造时缓存的实例，不经过 ref，fire-and-forget。
+  void _writeProgress() {
+    final id = state.articleId;
+    if (id == 0) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    int? pi;
+    if (!state.useCurated) pi = _firstVisiblePara();
+    final paras = state.paragraphs;
+    if (pi == null || paras.isEmpty) {
+      _db.saveReadProgress(id, lastOpenedAt: now).catchError((_) {});
+      return;
+    }
+    final progress = ((pi + 1) / paras.length).clamp(0.0, 1.0);
+    _db
+        .saveReadProgress(id, lastOpenedAt: now, lastPara: pi, readProgress: progress)
+        .catchError((_) {});
+  }
+
+  /// 与视口有交集的第一个段落下标；段落未布局 / 无滚动视口时返回 null。
+  /// 视口 rect 参照 _onTtsSegment 的取法（Scrollable context 的 RenderBox）。
+  int? _firstVisiblePara() {
+    final paras = state.paragraphs;
+    if (paras.isEmpty) return null;
+    RenderBox? vpRo;
+    for (var pi = 0; pi < paras.length; pi++) {
+      final ctx = paraKey(pi).currentContext;
+      if (ctx == null) continue;
+      final ro = Scrollable.maybeOf(ctx)?.context.findRenderObject();
+      if (ro is RenderBox && ro.hasSize) {
+        vpRo = ro;
+        break;
+      }
+    }
+    if (vpRo == null) return null;
+    final vpTop = vpRo.localToGlobal(Offset.zero).dy;
+    final vpBottom = vpTop + vpRo.size.height;
+    for (var pi = 0; pi < paras.length; pi++) {
+      final ctx = paraKey(pi).currentContext;
+      if (ctx == null) continue;
+      final ro = ctx.findRenderObject();
+      if (ro is! RenderBox || !ro.hasSize) continue;
+      final top = ro.localToGlobal(Offset.zero).dy;
+      if (top + ro.size.height <= vpTop) continue; // 整段已滚出视口上方
+      if (top >= vpBottom) return null; // 尚未滚到（异常态，放弃本次）
+      return pi;
+    }
+    return null;
+  }
 
   // ================= AI 精选 =================
   bool curating = false;
@@ -646,8 +719,11 @@ class ReadingController extends ChangeNotifier {
   @override
   void dispose() {
     // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行），
-    // 所以 TtsService 在构造时缓存，dispose 只用缓存实例。
+    // 所以 TtsService / DbService 在构造时缓存，dispose 只用缓存实例。
     _disposed = true;
+    // 退出前把当前进度补写一次（最后一段滚动可能还在防抖等待中）。
+    _progressTimer?.cancel();
+    _writeProgress();
     _tts.playing.removeListener(_onTtsChanged);
     _tts.segment.removeListener(_onTtsSegment);
     _tts.stop();
