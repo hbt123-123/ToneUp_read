@@ -14,13 +14,7 @@ class ReadingParagraph extends StatefulWidget {
   final Set<int> sel;
   final ValueNotifier<int> selVer;
   final int flashTok;
-
-  /// 点中某个词（[ti]）：[rect] 是该词在**屏幕坐标系**下的包围盒（多行词取
-  /// 点击所在那一行），供词卡就地浮窗锚定；二分命中失败等拿不到盒子的场景为 null。
-  final void Function(int ti, bool isLong, Rect? rect) onTok;
-
-  /// 点在空白/标点上（单击）：阅读页用于切换沉浸模式。长按空白仍走 [onEmptyLongPress]。
-  final VoidCallback onEmptyTap;
+  final void Function(int ti, bool isLong) onTok;
   final VoidCallback onEmptyLongPress;
 
   /// 选中高亮底色 / 朗读定位闪色（默认沿用深色 token，阅读页换肤时传入）。
@@ -42,7 +36,6 @@ class ReadingParagraph extends StatefulWidget {
     required this.selVer,
     required this.flashTok,
     required this.onTok,
-    required this.onEmptyTap,
     required this.onEmptyLongPress,
     this.selBg = const Color(0x4DE072B0),
     this.flashColor = const Color(0xFF8B5CF6),
@@ -68,8 +61,7 @@ class _ReadingParagraphState extends State<ReadingParagraph> {
   @override
   void initState() {
     super.initState();
-    // 用 onTapUp 而非 onTapDown：按下即触发会抢走长按手势，导致长按无法选中正文。
-    _tap = TapGestureRecognizer()..onTapUp = (d) => _hit(d.globalPosition, false);
+    _tap = TapGestureRecognizer()..onTapDown = (d) => _hit(d.globalPosition, false);
     widget.selVer.addListener(_onSelChanged);
     widget.segVer.addListener(_onSegChanged);
     _mine = _slice();
@@ -135,38 +127,11 @@ class _ReadingParagraphState extends State<ReadingParagraph> {
     final ti = _tokenAt(pos.offset);
     final onWord = ti >= 0 && ti < widget.toks.length && widget.toks[ti].word;
     if (!onWord) {
-      if (isLong) {
-        // 长按落在标点/空白上：保持旧行为，交给整段选择
-        widget.onEmptyLongPress();
-      } else {
-        widget.onEmptyTap();
-      }
+      // 长按落在标点/空白上：保持旧行为，交给整段选择
+      if (isLong) widget.onEmptyLongPress();
       return;
     }
-    widget.onTok(ti, isLong, _wordRect(ro, global, ti));
-  }
-
-  /// 点击词的屏幕包围盒：getBoxesForSelection 返回段落局部坐标，转全局；
-  /// 词折行成多盒时取「点击所在那一行」的盒子，浮窗锚定才不会跳到另一行。
-  Rect? _wordRect(RenderParagraph ro, Offset global, int ti) {
-    final start = widget.starts[ti];
-    try {
-      final boxes = ro.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + widget.toks[ti].text.length));
-      if (boxes.isEmpty) return null;
-      final local = ro.globalToLocal(global);
-      var pick = boxes.first;
-      for (final b in boxes) {
-        final r = b.toRect();
-        if (local.dy >= r.top && local.dy <= r.bottom) {
-          pick = b;
-          break;
-        }
-      }
-      final rect = pick.toRect();
-      return ro.localToGlobal(rect.topLeft) & rect.size;
-    } catch (_) {
-      return null;
-    }
+    widget.onTok(ti, isLong);
   }
 
   /// 字符偏移 → token 下标：O(log n) 二分，取代按 token 逐个命中测试。

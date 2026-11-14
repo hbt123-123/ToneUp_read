@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,10 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/features/reading/models/reading_state.dart';
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
-import 'package:toneup_read/services/db_service.dart';
-import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/app_exception.dart';
-import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/services/tts_service.dart';
 
 /// 阅读器状态与交互的核心：
@@ -35,16 +31,10 @@ class ReadingController extends ChangeNotifier {
     _tts = _ref.read(ttsProvider);
     _tts.playing.addListener(_onTtsChanged);
     _tts.segment.addListener(_onTtsSegment);
-    _db = _ref.read(dbProvider);
-    scrollController.addListener(_onScrollForProgress);
     load();
   }
 
   final WidgetRef _ref;
-
-  /// db 在构造时缓存：Riverpod 3 在 dispose 里禁用 ref（见文件尾注释），
-  /// 退出阅读页前还要补写一次进度，必须用缓存实例。
-  late final DbService _db;
 
   /// 需要弹 SnackBar 的轻提示（朗读失败等）；由页面注入。
   final void Function(String message)? onMessage;
@@ -69,7 +59,7 @@ class ReadingController extends ChangeNotifier {
       final db = _ref.read(dbProvider);
       // 不取 html：阅读器只用 plainText/blocks；source/publishedAt 等云端元信息供页头展示。
       const cols =
-          'id, title, sourceUrl, wordCount, plainText, blocks, source, publishedAt, expiresAt, cachedAt, status, summary, remoteId, ai_summary AS aiSummary';
+          'id, title, sourceUrl, wordCount, plainText, blocks, source, publishedAt, expiresAt, cachedAt, status, summary, remoteId';
       Map<String, dynamic>? row;
       if (state.articleId != 0) {
         row = await _first(db, 'SELECT $cols FROM articles WHERE id = ?', [state.articleId]);
@@ -108,7 +98,6 @@ class ReadingController extends ChangeNotifier {
     state.publishedAt = (row['publishedAt'] as num?)?.toInt();
     state.cachedAt = (row['cachedAt'] as num?)?.toInt();
     state.wordCount = row['wordCount'] as int? ?? 0;
-    state.aiSummary = row['aiSummary'] as String? ?? '';
     if (state.title.isEmpty) state.title = row['title'] as String? ?? '';
     List<ArticleBlock> bs = [];
     final raw = row['blocks'] as String?;
@@ -126,9 +115,6 @@ class ReadingController extends ChangeNotifier {
     }
     state.blocks = bs;
     state.error = '';
-    // 「最近阅读」打卡：正文就绪立刻写 lastOpenedAt（此时段落尚未布局，
-    // _firstVisiblePara 必为 null，只会刷时间戳，不会覆盖已有 lastPara）。
-    _writeProgress();
     flashPara = focusPara;
     flashTok = focusTok;
     if (focusPara >= 0) {
@@ -351,49 +337,6 @@ class ReadingController extends ChangeNotifier {
     return fallback;
   }
 
-  // ================= 沉浸模式 =================
-
-  /// 顶栏/设置面板显隐：点正文空白处切换（词内点击不受影响）。
-  /// 选区条与朗读胶囊是活动 UI，不随沉浸隐藏。
-  bool chromeVisible = true;
-
-  void toggleChrome() {
-    chromeVisible = !chromeVisible;
-    _notify();
-  }
-
-  // ================= AI 总结 =================
-  bool summarizing = false;
-
-  /// AI 总结全文，结果缓存进 articles.ai_summary（重复打开秒出）。
-  /// 正文缺失 / 未入库时抛 AppException，由 UI 层提示。
-  Future<String> summarizeArticle() async {
-    if (state.plain.trim().isEmpty) throw AppException('noBody', '这篇文章没有正文，无法总结');
-    if (state.articleId == 0) throw AppException('noId', '文章尚未入库，无法保存总结');
-    summarizing = true;
-    _notify();
-    try {
-      const sys = '你是英语文章助教。用中文总结用户给出的英语文章：'
-          '第一行一句话核心主旨；随后 3-5 条要点，每条以「·」开头单独成行；'
-          '最后一行给出难度评级（格式：难度：A2/B1/B2/C1/C2 之一）。'
-          '不要 Markdown、不要序号、不要空行。';
-      final user = '文章标题：${state.title}\n\n${LlmService.clipArticle(state.plain)}';
-      final out = await _ref
-          .read(llmProvider)
-          .chat(sys, user, model: AppConfigService.defaultGatewayAnalysisModel, temperature: 0.3);
-      final text = out.trim();
-      if (_disposed) return text;
-      state.aiSummary = text;
-      await _db.saveAiSummary(state.articleId, text);
-      return text;
-    } finally {
-      if (!_disposed) {
-        summarizing = false;
-        _notify();
-      }
-    }
-  }
-
   // ================= 图片重试 =================
   final Map<int, int> _imgRetry = {};
   final Set<int> _imgErr = {};
@@ -425,68 +368,6 @@ class ReadingController extends ChangeNotifier {
   int flashTok = -1;
 
   GlobalKey paraKey(int pi) => _paraKeys.putIfAbsent(pi, () => GlobalKey());
-
-  // ================= 阅读进度 =================
-  // 首页「继续阅读」卡 + 重进文章恢复定位：lastOpenedAt 打开即写，
-  // lastPara/readProgress 在滚动停顿 800ms 后按「视口顶部以下第一段」落库。
-  // 精选版段号与原文不对应，精选模式下不更新段号（只刷时间戳）。
-  Timer? _progressTimer;
-
-  void _onScrollForProgress() {
-    if (_disposed) return;
-    _progressTimer?.cancel();
-    _progressTimer = Timer(const Duration(milliseconds: 800), _writeProgress);
-  }
-
-  /// 落库当前进度；拿不到渲染信息（正文未布局等）时只刷 lastOpenedAt。
-  /// dispose 里也会调用：db 用构造时缓存的实例，不经过 ref，fire-and-forget。
-  void _writeProgress() {
-    final id = state.articleId;
-    if (id == 0) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    int? pi;
-    if (!state.useCurated) pi = _firstVisiblePara();
-    final paras = state.paragraphs;
-    if (pi == null || paras.isEmpty) {
-      _db.saveReadProgress(id, lastOpenedAt: now).catchError((_) {});
-      return;
-    }
-    final progress = ((pi + 1) / paras.length).clamp(0.0, 1.0);
-    _db
-        .saveReadProgress(id, lastOpenedAt: now, lastPara: pi, readProgress: progress)
-        .catchError((_) {});
-  }
-
-  /// 与视口有交集的第一个段落下标；段落未布局 / 无滚动视口时返回 null。
-  /// 视口 rect 参照 _onTtsSegment 的取法（Scrollable context 的 RenderBox）。
-  int? _firstVisiblePara() {
-    final paras = state.paragraphs;
-    if (paras.isEmpty) return null;
-    RenderBox? vpRo;
-    for (var pi = 0; pi < paras.length; pi++) {
-      final ctx = paraKey(pi).currentContext;
-      if (ctx == null) continue;
-      final ro = Scrollable.maybeOf(ctx)?.context.findRenderObject();
-      if (ro is RenderBox && ro.hasSize) {
-        vpRo = ro;
-        break;
-      }
-    }
-    if (vpRo == null) return null;
-    final vpTop = vpRo.localToGlobal(Offset.zero).dy;
-    final vpBottom = vpTop + vpRo.size.height;
-    for (var pi = 0; pi < paras.length; pi++) {
-      final ctx = paraKey(pi).currentContext;
-      if (ctx == null) continue;
-      final ro = ctx.findRenderObject();
-      if (ro is! RenderBox || !ro.hasSize) continue;
-      final top = ro.localToGlobal(Offset.zero).dy;
-      if (top + ro.size.height <= vpTop) continue; // 整段已滚出视口上方
-      if (top >= vpBottom) return null; // 尚未滚到（异常态，放弃本次）
-      return pi;
-    }
-    return null;
-  }
 
   // ================= AI 精选 =================
   bool curating = false;
@@ -765,11 +646,8 @@ class ReadingController extends ChangeNotifier {
   @override
   void dispose() {
     // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行），
-    // 所以 TtsService / DbService 在构造时缓存，dispose 只用缓存实例。
+    // 所以 TtsService 在构造时缓存，dispose 只用缓存实例。
     _disposed = true;
-    // 退出前把当前进度补写一次（最后一段滚动可能还在防抖等待中）。
-    _progressTimer?.cancel();
-    _writeProgress();
     _tts.playing.removeListener(_onTtsChanged);
     _tts.segment.removeListener(_onTtsSegment);
     _tts.stop();

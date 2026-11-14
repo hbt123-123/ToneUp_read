@@ -38,9 +38,6 @@ class ReadingState {
   bool loading;
   String error;
 
-  /// AI 全文总结缓存（articles.ai_summary，空串 = 未生成过）。
-  String aiSummary;
-
   ReadingState({
     required this.guid,
     required this.title,
@@ -57,7 +54,6 @@ class ReadingState {
     this.wordCount = 0,
     this.loading = true,
     this.error = '',
-    this.aiSummary = '',
   });
 
   List<ArticleBlock> get activeBlocks =>
