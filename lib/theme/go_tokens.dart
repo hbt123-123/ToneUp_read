@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// 设计令牌：**尺寸 / 字号 / 行高 / 圆角 / 布局**（与明暗主题无关）。
@@ -10,6 +9,9 @@ class Go {
 
   /// rpx → dp。
   static double r(num rpx) => rpx * 0.5;
+
+  /// 标题字体：未显式选择字体时用衬线，其余沿用正文字体 id。
+  static String titleFont(String readerFont) => readerFont.isEmpty ? 'serif' : readerFont;
 
   // ================= 字体 =================
   static const fontRead = 'Songti SC'; // 阅读正文衬线（回退到系统衬线）

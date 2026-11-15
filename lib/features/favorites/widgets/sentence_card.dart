@@ -11,6 +11,7 @@ class FavoriteSentenceCard extends StatelessWidget {
   final VoidCallback onOpenArticle;
   final VoidCallback onAnalyze;
   final ValueChanged<String> onCopyTranslation;
+  final VoidCallback onRemove;
 
   const FavoriteSentenceCard({
     super.key,
@@ -21,6 +22,7 @@ class FavoriteSentenceCard extends StatelessWidget {
     required this.onOpenArticle,
     required this.onAnalyze,
     required this.onCopyTranslation,
+    required this.onRemove,
   });
 
   @override
@@ -54,6 +56,7 @@ class FavoriteSentenceCard extends StatelessWidget {
                 _miniBtn(g, '复制', onCopy),
                 _miniBtn(g, '回到原文', onOpenArticle),
                 _miniBtn(g, sentence['_analyzing'] == true ? '拆解中…' : (analysis != null ? '重新拆解' : 'LLM 拆解'), onAnalyze, ai: true),
+                _miniBtn(g, '删除', onRemove, danger: true),
               ],
             ),
           ),
@@ -95,12 +98,15 @@ class FavoriteSentenceCard extends StatelessWidget {
     );
   }
 
-  Widget _miniBtn(GoPalette g, String label, VoidCallback onTap, {bool ai = false}) => GestureDetector(
+  Widget _miniBtn(GoPalette g, String label, VoidCallback onTap, {bool ai = false, bool danger = false}) => GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp1),
-          decoration: BoxDecoration(border: Border.all(color: ai ? g.primary : g.outline), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? g.primary : g.onSurface2)),
+          decoration: BoxDecoration(
+            border: Border.all(color: danger ? g.danger : (ai ? g.primary : g.outline)),
+            borderRadius: BorderRadius.circular(Go.rFull),
+          ),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: danger ? g.danger : (ai ? g.primary : g.onSurface2))),
         ),
       );
 

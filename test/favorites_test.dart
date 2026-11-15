@@ -95,7 +95,7 @@ class _VocabTestDb extends FakeDb {
 Map<String, dynamic> _wcRow(String word, String resultJson) =>
     {'word': word, 'lemma': word, 'mode': 'fixture', 'result': resultJson};
 
-Map<String, dynamic> _dictResult(String word, String phonetic, String zh) => jsonEncode({
+String _dictResult(String word, String phonetic, String zh) => jsonEncode({
       'kind': 'dict',
       'word': word,
       'phonetic': phonetic,

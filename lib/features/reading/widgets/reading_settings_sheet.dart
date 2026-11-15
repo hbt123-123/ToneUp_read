@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_config_service.dart';
+import 'package:toneup_read/services/reader_fonts.dart';
 import 'package:toneup_read/services/tts_voices.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 
@@ -15,6 +16,8 @@ class ReadingSettingsPanel extends StatelessWidget {
   final ValueChanged<String> onTheme;
   final ValueChanged<int> onFontStep;
   final ValueChanged<double> onLineStep;
+  final ValueChanged<String> onFontFamily;
+  final ValueChanged<double> onParaStep;
   final VoidCallback onOpenVoice;
   final String voiceLabel;
 
@@ -25,6 +28,8 @@ class ReadingSettingsPanel extends StatelessWidget {
     required this.onTheme,
     required this.onFontStep,
     required this.onLineStep,
+    required this.onFontFamily,
+    required this.onParaStep,
     required this.onOpenVoice,
     required this.voiceLabel,
   });
@@ -50,6 +55,17 @@ class ReadingSettingsPanel extends StatelessWidget {
             _step('−', () => onLineStep(-0.1)),
             SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
             _step('＋', () => onLineStep(0.1)),
+          ])),
+          _row('字体', Row(mainAxisSize: MainAxisSize.min, children: [
+            for (final f in kReaderFonts) ...[
+              if (f.first != kReaderFonts.first.first) const SizedBox(width: Go.sp3),
+              _themeChip(f.last, cfg.readerFont == f.first, () => onFontFamily(f.first)),
+            ],
+          ])),
+          _row('段距', Row(mainAxisSize: MainAxisSize.min, children: [
+            _step('−', () => onParaStep(-2)),
+            SizedBox(width: Go.r(80), child: Text(cfg.paraSpacing.toStringAsFixed(0), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: pal.secondary))),
+            _step('＋', () => onParaStep(2)),
           ])),
           _row(
             '朗读音色',
@@ -100,7 +116,7 @@ class ReadingSettingsPanel extends StatelessWidget {
           children: [
             // minWidth 而非固定宽：「阅读外观」四个字比旧的 48dp 标签盒宽，固定宽会折行。
             ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: Go.r(96)),
+              constraints: BoxConstraints(minWidth: Go.r(96)),
               child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, color: pal.ink)),
             ),
             const Spacer(),

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
+import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 词汇 AI 整理：从「我的 → 学习工具」进入，不再占用收藏页的日常管理界面。

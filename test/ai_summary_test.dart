@@ -6,7 +6,6 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:toneup_read/services/app_config_service.dart';
-import 'package:toneup_read/services/db_service.dart';
 import 'package:toneup_read/services/http_service.dart';
 import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/services/vocab_service.dart';

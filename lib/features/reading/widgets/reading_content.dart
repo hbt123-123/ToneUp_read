@@ -13,7 +13,10 @@ class ReadingCover extends StatelessWidget {
   final GoReaderPalette pal;
   final void Function(int ti, bool isLong) onTitleToken;
 
-  const ReadingCover({super.key, required this.controller, required this.pal, required this.onTitleToken});
+  /// 标题字体（阅读设置里的字体选项；空串 → 衬线）。
+  final String titleFont;
+
+  const ReadingCover({super.key, required this.controller, required this.pal, required this.onTitleToken, this.titleFont = ''});
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +37,7 @@ class ReadingCover extends StatelessWidget {
             _TitleText(
               toks: toks,
               color: pal.ink,
+              fontFamily: Go.titleFont(titleFont),
               onTok: onTitleToken,
             ),
           const SizedBox(height: Go.sp3),
@@ -73,6 +77,10 @@ class ReadingContent extends StatelessWidget {
   final double fontSize;
   final double lineHeight;
 
+  /// 正文字体 id（空串 = 系统默认）与段距（dp）。
+  final String fontFamily;
+  final double paraSpacing;
+
   /// 点中某个 token（pi = -1 表示标题）。
   final void Function(int pi, int ti, bool isLong) onToken;
 
@@ -82,6 +90,8 @@ class ReadingContent extends StatelessWidget {
     required this.pal,
     required this.fontSize,
     required this.lineHeight,
+    this.fontFamily = '',
+    this.paraSpacing = 18,
     required this.onToken,
   });
 
@@ -111,6 +121,7 @@ class ReadingContent extends StatelessWidget {
           ReadingCover(
             controller: controller,
             pal: pal,
+            titleFont: fontFamily,
             onTitleToken: (ti, isLong) => onToken(-1, ti, isLong),
           ),
           // 标题块与正文之间用一条短分隔线收住视线（纸色/夜读都适用）。
@@ -124,7 +135,7 @@ class ReadingContent extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp8, Go.sp6, 0),
             child: DefaultTextStyle(
-              style: TextStyle(fontSize: fontSize, height: lineHeight, color: pal.ink),
+              style: TextStyle(fontFamily: fontFamily.isEmpty ? null : fontFamily, fontSize: fontSize, height: lineHeight, color: pal.ink),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
             ),
           ),
@@ -142,8 +153,8 @@ class ReadingContent extends StatelessWidget {
     final starts = controller.startsAt(pi);
     return Container(
       key: controller.paraKey(pi),
-      // 段距从 10dp 加宽到 18dp：长文阅读的段落呼吸感。
-      margin: const EdgeInsets.only(bottom: 18),
+      // 段距来自阅读设置（默认 18dp：长文阅读的段落呼吸感）。
+      margin: EdgeInsets.only(bottom: paraSpacing),
       child: GestureDetector(
         onLongPress: () => controller.onParaLongPress(pi),
         child: ReadingParagraph(
@@ -203,7 +214,10 @@ class _TitleText extends StatefulWidget {
   /// 标题 ink（默认沿用深色 token；阅读页换肤时传入）。
   final Color color;
 
-  const _TitleText({required this.toks, required this.onTok, this.color = const Color(0xFFECE9F5)});
+  /// 标题字体族（默认衬线）。
+  final String fontFamily;
+
+  const _TitleText({required this.toks, required this.onTok, this.color = const Color(0xFFECE9F5), this.fontFamily = 'serif'});
 
   @override
   State<_TitleText> createState() => _TitleTextState();
@@ -215,7 +229,7 @@ class _TitleTextState extends State<_TitleText> {
   late List<int> _starts;
 
   TextStyle get _style => TextStyle(
-        fontFamily: Go.fontRead,
+        fontFamily: widget.fontFamily,
         fontWeight: FontWeight.w700,
         fontSize: Go.fsDisplay,
         height: Go.lhTight,
