@@ -229,7 +229,7 @@ jobs:
           # 2) 证书指纹必须与发布证书一致：防止 Secrets 配错或回退到 debug 签名。
           CERTS="$("$APKSIGNER" verify --print-certs "$APK")"
           # build-tools 版本不同，前缀可能是 "Signer #1:" 或 "V2 Signer:"，只认字段名。
-          ACTUAL_CERT="$(printf '%s\n' "$CERTS" | awk -F': ' '/certificate SHA-256 digest:/{print $2; exit}' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          ACTUAL_CERT="$(printf '%s\n' "$CERTS" | awk -F': ' '/certificate SHA-256 digest:/{print $NF; exit}' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           EXPECTED_CERT="$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
             echo "::error::APK 签名证书不匹配：期望 $EXPECTED_CERT，实际 ${ACTUAL_CERT:-<未取到>}"
