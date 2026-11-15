@@ -61,7 +61,7 @@ class _ReadingParagraphState extends State<ReadingParagraph> {
   @override
   void initState() {
     super.initState();
-    _tap = TapGestureRecognizer()..onTapDown = (d) => _hit(d.globalPosition, false);
+    _tap = TapGestureRecognizer()..onTapUp = (d) => _hit(d.globalPosition, false);
     widget.selVer.addListener(_onSelChanged);
     widget.segVer.addListener(_onSegChanged);
     _mine = _slice();

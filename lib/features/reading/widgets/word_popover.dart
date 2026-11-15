@@ -157,7 +157,7 @@ class _WordPopoverState extends ConsumerState<WordPopover> {
           const SizedBox(width: Go.sp2),
           Padding(
             padding: const EdgeInsets.only(top: 2),
-            child: Text('/$phonetic/', style: TextStyle(fontSize: Go.fsMeta, color: pal.secondary)),
+            child: Text(phonetic, style: TextStyle(fontSize: Go.fsMeta, color: pal.secondary)),
           ),
         ],
         const SizedBox(width: Go.sp2),

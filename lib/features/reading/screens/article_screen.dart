@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +8,7 @@ import 'package:toneup_read/features/reading/widgets/reading_content.dart';
 import 'package:toneup_read/features/reading/widgets/reading_settings_sheet.dart';
 import 'package:toneup_read/features/reading/widgets/reading_toolbar.dart';
 import 'package:toneup_read/features/reading/widgets/sentence_action_sheet.dart';
+import 'package:toneup_read/features/reading/widgets/word_popover.dart';
 import 'package:toneup_read/features/reading/widgets/word_popup.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_config_service.dart';
@@ -46,6 +46,16 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   late final ReadingController _c;
   bool _showSettings = false;
 
+  /// 沉浸模式：点正文空白收起顶栏，再点恢复。
+  bool _immersive = false;
+
+  /// 就地浮窗（点词弹出，替代旧的全屏词卡弹层）。
+  bool _popOpen = false;
+  String _popWord = '';
+  String _popSentence = '';
+  int _popPi = -1;
+  int _popTi = -1;
+
   @override
   void initState() {
     super.initState();
@@ -58,12 +68,27 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       focusTok: widget.focusTok,
       onMessage: _snack,
     );
+    // 正文一滚，锚定失效：就地浮窗立即收起。
+    _c.scrollController.addListener(_dismissPopoverOnScroll);
+  }
+
+  void _dismissPopoverOnScroll() {
+    if (_popOpen) setState(() => _popOpen = false);
   }
 
   @override
   void dispose() {
+    _c.scrollController.removeListener(_dismissPopoverOnScroll);
     _c.dispose();
     super.dispose();
+  }
+
+  /// 点正文空白：切换沉浸模式；进入沉浸时顺手收起设置面板。
+  void _toggleImmersive() {
+    setState(() {
+      _immersive = !_immersive;
+      if (_immersive) _showSettings = false;
+    });
   }
 
   void _snack(String msg) {
@@ -127,7 +152,28 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         .recordOccurrence(tk.text, sentence, _c.state.guid, _c.state.title, _c.state.sourceHost, pi, ti)
         .catchError((_) {});
     ref.read(vocabRevisionProvider.notifier).bump();
-    _openWord(tk.text, sentence: sentence, paraIndex: pi, tokIndex: ti);
+    _openPopover(tk.text, sentence: sentence, paraIndex: pi, tokIndex: ti);
+  }
+
+  void _openPopover(String text, {String sentence = '', int paraIndex = -1, int tokIndex = -1}) {
+    final clean = ArticleScreen.cleanQueryText(text);
+    if (clean.isEmpty) return;
+    setState(() {
+      _popOpen = true;
+      _popWord = clean;
+      _popSentence = sentence.isNotEmpty ? sentence : clean;
+      _popPi = paraIndex;
+      _popTi = tokIndex;
+    });
+  }
+
+  void _openPopoverDetail() {
+    final word = _popWord;
+    final sentence = _popSentence;
+    final pi = _popPi;
+    final ti = _popTi;
+    setState(() => _popOpen = false);
+    _openWord(word, sentence: sentence, paraIndex: pi, tokIndex: ti);
   }
 
   void _openWord(String text, {String sentence = '', int paraIndex = -1, int tokIndex = -1}) {
@@ -296,18 +342,20 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             children: [
               Column(
                 children: [
-                  ReadingAppBar(
-                    title: _c.state.title,
-                    pal: pal,
-                    selectMode: _c.selectMode,
-                    ttsBusy: _c.ttsPlaying || _c.ttsSynthesizing,
-                    useCurated: _c.state.useCurated,
-                    settingsOpen: _showSettings,
-                    onToggleSelect: _c.toggleSelectMode,
-                    onToggleTts: _c.toggleReadAloud,
-                    onCurate: _onCurateTap,
-                    onToggleSettings: () => setState(() => _showSettings = !_showSettings),
-                  ),
+                  if (!_immersive)
+                    ReadingAppBar(
+                      // 标题在封面上完整展示（可点词）；顶栏只留通用文案，避免长标题截断。
+                      title: '',
+                      pal: pal,
+                      selectMode: _c.selectMode,
+                      ttsBusy: _c.ttsPlaying || _c.ttsSynthesizing,
+                      useCurated: _c.state.useCurated,
+                      settingsOpen: _showSettings,
+                      onToggleSelect: _c.toggleSelectMode,
+                      onToggleTts: _c.toggleReadAloud,
+                      onCurate: _onCurateTap,
+                      onToggleSettings: () => setState(() => _showSettings = !_showSettings),
+                    ),
                   if (_c.selectMode)
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
@@ -320,17 +368,25 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                       child: Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
                           textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, height: Go.lhSnug, color: pal.secondary)),
                     ),
-                  if (_showSettings)
+                  if (!_immersive && _showSettings)
                     ReadingSettingsPanel(
                       cfg: cfg,
                       pal: pal,
                       onTheme: (t) => ref.read(appConfigProvider).setReader(theme: t),
                       onFontStep: _changeFont,
                       onLineStep: _changeLine,
+                      onFontFamily: (f) => ref.read(appConfigProvider).setReader(font: f),
+                      onParaStep: (d) => ref.read(appConfigProvider).setReader(paraSpacing: cfg.paraSpacing + d),
                       onOpenVoice: _openVoiceSheet,
                       voiceLabel: _voiceLabel(cfg.ttsVoice),
                     ),
-                  Expanded(child: _body(cfg, pal)),
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _toggleImmersive,
+                      child: _body(cfg, pal),
+                    ),
+                  ),
                 ],
               ),
               ValueListenableBuilder<int>(
@@ -349,6 +405,29 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                   );
                 },
               ),
+              if (_popOpen)
+                Positioned(
+                  left: Go.sp8,
+                  right: Go.sp8,
+                  bottom: MediaQuery.of(context).padding.bottom + Go.sp8,
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: WordPopover(
+                      word: _popWord,
+                      pal: pal,
+                      sentence: _popSentence,
+                      articleGuid: _c.state.guid,
+                      articleTitle: _c.state.title,
+                      sourceLabel: _c.state.sourceHost,
+                      paraIndex: _popPi,
+                      tokIndex: _popTi,
+                      maxHeight: 280,
+                      onClose: () => setState(() => _popOpen = false),
+                      onDetail: _openPopoverDetail,
+                      onSpeak: (w) => _c.speakPreview(w),
+                    ),
+                  ),
+                ),
               if (_c.ttsSynthesizing || (_c.ttsPlaying && _c.ttsArticle))
                 ReadingTtsPill(
                   pal: pal,
@@ -389,6 +468,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       pal: pal,
       fontSize: cfg.fontSize,
       lineHeight: cfg.lineHeight,
+      fontFamily: cfg.readerFont,
+      paraSpacing: cfg.paraSpacing,
       onToken: (pi, ti, isLong) {
         final isTitle = pi < 0;
         final toks = isTitle ? _c.tokenize(_c.state.title) : _c.tokensAt(pi);

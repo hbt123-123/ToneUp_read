@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -63,7 +64,7 @@ Widget _wrap(AppConfigService cfg, FakeDb db, Widget child) => ProviderScope(
         httpProvider.overrideWithValue(HttpService(client: MockClient((req) async {
           return http.Response('{}', 200, headers: {'content-type': 'application/json'});
         }))),
-        appConfigProvider.overrideWithValue(cfg),
+        appConfigProvider.overrideWith((ref) => cfg),
       ],
       child: child,
     );
@@ -78,7 +79,7 @@ Offset _spanCenter(WidgetTester tester, {required bool word}) {
   final root = (rich.text as TextSpan).children!.first as TextSpan;
   final span = root.children!.whereType<TextSpan>().firstWhere((s) => (s.recognizer != null) == word);
   final text = root.toPlainText();
-  final piece = span.toPlainText()!;
+  final piece = span.toPlainText();
   final start = text.indexOf(piece);
   final rp = tester.renderObject<RenderParagraph>(find.byWidget(rich));
   final boxes = rp.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + piece.length));

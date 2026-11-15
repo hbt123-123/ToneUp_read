@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/features/home/widgets/article_card.dart';
+import 'package:toneup_read/features/home/widgets/continue_card.dart';
 import 'package:toneup_read/features/home/widgets/home_notice.dart';
 import 'package:toneup_read/features/home/widgets/source_rail.dart';
 import 'package:toneup_read/features/reading/screens/article_screen.dart';
@@ -39,6 +40,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// 由累计 items 汇总的来源（不含「全部」），只增不清，避免切走后回不来。
   final List<String> _sources = [];
 
+  /// 「最近阅读」：只取一条，用于顶部续读卡。
+  final List<Map<String, dynamic>> _recent = [];
+
   String? _source; // null = 全部
   int _page = 1;
   int _total = 0;
@@ -53,7 +57,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadFirst());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadRecent();
+      _loadFirst();
+    });
   }
 
   @override
@@ -233,6 +240,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  /// 最近阅读：失败静默（首页主体不受影响），拿到后补中译。
+  Future<void> _loadRecent() async {
+    var rows = const <Map<String, dynamic>>[];
+    try {
+      rows = await ref.read(remoteArticleProvider).recentlyRead(1);
+    } catch (_) {
+      rows = const [];
+    }
+    if (!mounted) return;
+    setState(() {
+      _recent
+        ..clear()
+        ..addAll(rows);
+    });
+    await _fillZh(_recent);
+  }
+
   /// 批量取中文标题：失败由 `titleZhBatch` 内部吞掉，卡片回落英文标题。
   Future<void> _fillZh(List<Map<String, dynamic>> rows) async {
     final titles = <String>{};
@@ -330,6 +354,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _goMine() => ref.read(tabIndexProvider.notifier).set(2);
 
+  /// 续读卡：本地行已有 id，直接按上次段落打开阅读器。
+  Future<void> _openRecent(Map<String, dynamic> row) async {
+    final id = row['id'] is num ? (row['id'] as num).toInt() : null;
+    if (id == null) return;
+    ref.read(articleRevisionProvider.notifier).bump();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ArticleScreen(
+          articleId: id,
+          title: (row['title'] ?? '').toString().trim(),
+          focusPara: row['lastPara'] is num ? (row['lastPara'] as num).toInt() : -1,
+        ),
+      ),
+    );
+    await _refreshCached();
+    await _loadRecent();
+  }
+
   /// 面向用户的错误文案：AppException 自带中文 message，其它回落通用提示。
   String _errOf(Object e) => e is AppException ? (e.message) : '加载失败，请稍后重试';
 
@@ -363,6 +406,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               if (_noKey) const HomeKeyBanner(),
               if (_offline) HomeOfflineBanner(onRetry: _loadFirst),
               HomeSourceRail(sources: _sources, selected: _source, onPick: _pickSource),
+              if (_recent.isNotEmpty)
+                HomeContinueCard(
+                  row: _recent.first,
+                  zhTitle: _zh['${_recent.first['title'] ?? ''}'],
+                  onTap: () => _openRecent(_recent.first),
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () => _loadFirst(),
