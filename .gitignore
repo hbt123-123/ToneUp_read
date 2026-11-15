@@ -68,7 +68,7 @@ dist/
 
 # Bundled SDK artifacts
 Android-SDK@*/
-
+.val/
 .codebuddy
 .trae/
 .zcode/

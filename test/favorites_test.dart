@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:toneup_read/features/favorites/screens/favorites_screen.dart';
+import 'package:toneup_read/features/favorites/screens/vocab_organize_screen.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/http_service.dart';
@@ -243,6 +244,35 @@ void main() {
       expect(find.text('apple'), findsOneWidget);
       expect(find.text('orange'), findsNothing);
       expect(find.byIcon(Icons.volume_up_outlined), findsOneWidget);
+    });
+
+    testWidgets('AI 整理入口：单词分段可见，点击进入整理页', (tester) async {
+      final db = _seed();
+      await _openFavorites(tester, db);
+
+      // 单词分段且确有收藏 → AppBar 出现 sparkle 按钮（GoIcon 'sparkle' → auto_awesome）。
+      expect(find.byIcon(Icons.auto_awesome), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.auto_awesome));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(find.byType(VocabOrganizeScreen), findsOneWidget);
+    });
+
+    testWidgets('AI 整理入口：句子分段不可见', (tester) async {
+      final db = _seed();
+      await _openFavorites(tester, db);
+
+      await tester.tap(find.textContaining('句子 1'));
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(find.byIcon(Icons.auto_awesome), findsNothing);
+    });
+
+    testWidgets('AI 整理入口：空收藏时不显示（地球态保持干净）', (tester) async {
+      // 空 _VocabTestDb：无 vocab_head 记录 → _heads 为空，与「清空」同门控应隐藏按钮。
+      await _openFavorites(tester, _VocabTestDb());
+
+      expect(find.byIcon(Icons.auto_awesome), findsNothing);
     });
 
     testWidgets('搜索无结果时显示未找到空态', (tester) async {

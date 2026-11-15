@@ -5,7 +5,7 @@ import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 
-/// 词汇 AI 整理：从「我的 → 学习工具」进入，不再占用收藏页的日常管理界面。
+/// 词汇 AI 整理：从收藏页 AppBar 的次级操作进入（仅单词分段），不占用收藏页的日常管理界面。
 /// 仍走 `VocabService.organize()`（按主题归类 + 释义/词族/例句），结果只在本页展示。
 class VocabOrganizeScreen extends ConsumerStatefulWidget {
   const VocabOrganizeScreen({super.key});

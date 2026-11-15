@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:toneup_read/features/favorites/screens/vocab_organize_screen.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/update_controller.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
@@ -99,26 +98,6 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                             trailing: GoSwitch(
                               value: dark,
                               onChanged: (v) => ref.read(themeModeProvider.notifier).set(v),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // —— 学习工具 ——
-                    GoSection(
-                      title: '学习工具',
-                      children: [
-                        GoCard(
-                          padding: EdgeInsets.zero,
-                          child: GoListTile(
-                            icon: 'robot',
-                            title: 'AI 整理收藏',
-                            subtitle: '按主题归类已收藏的单词，并补全释义与例句',
-                            divider: false,
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const VocabOrganizeScreen()),
                             ),
                           ),
                         ),

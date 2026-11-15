@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:toneup_read/features/favorites/screens/vocab_organize_screen.dart';
 import 'package:toneup_read/features/favorites/widgets/sentence_card.dart';
 import 'package:toneup_read/features/favorites/widgets/word_card.dart';
 import 'package:toneup_read/features/favorites/widgets/word_occurrence_sheet.dart';
@@ -17,7 +18,7 @@ import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 收藏（原「词汇」+「句子」合并）：轻量管理单词与句子收藏。
 ///
-/// - 单词：搜索、全部/单词/短语筛选、发音、出处回原文、删除、清空、导出（半角逗号分隔）。
+/// - 单词：搜索、全部/单词/短语筛选、发音、AI 整理（次级入口）、出处回原文、删除、清空、导出（半角逗号分隔）。
 /// - 句子：搜索、翻译（结果落库）/朗读/复制/回到原文/LLM 拆解/删除。
 class FavoritesScreen extends ConsumerStatefulWidget {
   const FavoritesScreen({super.key});
@@ -397,6 +398,18 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
               child: GestureDetector(
                 onTap: _clearAll,
                 child: Text('清空', style: TextStyle(fontSize: Go.fsMeta, color: GoPalette.of(context).onSurface3)),
+              ),
+            ),
+          // AI 整理：次级入口，仅单词分段且确有收藏时出现（原「我的」页入口已撤）。
+          if (_segment == _tabWords && _heads.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: Go.sp2),
+              child: GoIconBtn(
+                icon: 'sparkle',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const VocabOrganizeScreen()),
+                ),
               ),
             ),
           if (_segment == _tabWords)
