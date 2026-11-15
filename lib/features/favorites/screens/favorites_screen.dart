@@ -360,11 +360,8 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
         });
       }
     }
-    final empty = _segment == _tabWords ? _filtered.isEmpty : _filteredSentences.isEmpty;
     return GoPage(
       topPad: false,
-      globe: true,
-      globeActive: onThisTab && empty,
       child: Stack(
         children: [
           Column(

@@ -390,8 +390,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return GoPage(
       topPad: false,
-      globe: true,
-      globeActive: ref.watch(tabIndexProvider) == 0,
       child: Stack(
         children: [
           Column(

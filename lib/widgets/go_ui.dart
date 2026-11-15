@@ -4,119 +4,23 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:toneup_read/theme/go_tokens.dart';
-import 'package:toneup_read/widgets/go_globe.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
 
 // =====================================================================
-// 背景：主题底色 + 紫青光晕（可选：程序化线框地球）
+// 背景：主题纯色底。不做光晕/纹理——安静阅读器，长文阅读面尤其如此。
 // =====================================================================
 class GoBackdrop extends StatelessWidget {
   final Widget child;
-  final bool globe;
-  final bool globeActive;
 
-  /// 非空时铺一层实色底、**不画光晕**（阅读面用，长文阅读不能有背景眩光）。
+  /// 非空时铺一层实色底（阅读面换肤用）。
   final Color? surface;
-  const GoBackdrop({super.key, required this.child, this.globe = false, this.globeActive = true, this.surface});
+  const GoBackdrop({super.key, required this.child, this.surface});
 
   @override
   Widget build(BuildContext context) {
     final g = GoPalette.of(context);
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      color: surface ?? g.bg,
-      child: Stack(
-        children: [
-          if (surface == null) ...[
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: const Alignment(-0.7, -0.9),
-                    radius: 1.35,
-                    colors: [g.primary.withValues(alpha: dark ? 0.55 : 0.14), g.primary.withValues(alpha: 0)],
-                    stops: const [0, 0.65],
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: const Alignment(0.95, 1.1),
-                    radius: 1.4,
-                    colors: [g.secondary.withValues(alpha: dark ? 0.45 : 0.10), g.secondary.withValues(alpha: 0)],
-                    stops: const [0, 0.7],
-                  ),
-                ),
-              ),
-            ),
-          ],
-          if (globe) Positioned.fill(child: GoGlobe(active: globeActive)),
-          child,
-        ],
-      ),
-    );
+    return Container(color: surface ?? g.bg, child: child);
   }
-}
-
-class GoGlowPulse extends StatefulWidget {
-  final Widget child;
-  final Color color;
-  final double blur;
-  const GoGlowPulse({super.key, required this.child, required this.color, this.blur = 14});
-  @override
-  State<GoGlowPulse> createState() => _GoGlowPulseState();
-}
-
-class _GoGlowPulseState extends State<GoGlowPulse> with SingleTickerProviderStateMixin {
-  late final _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))..repeat(reverse: true);
-  late final _a = Tween<double>(begin: 0.4, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut));
-
-  /// 每 [_paintEvery] 帧才重绘一次：1.8s 的脉冲 20fps 已足够顺滑。
-  /// 只动 alpha、固定 blurRadius（不改绘制边界/不重算模糊），再套 RepaintBoundary 隔离，
-  /// 避免激活项脉冲每帧把底部导航（含全宽 BackdropFilter 玻璃层）一起重绘。
-  static const _paintEvery = 3;
-  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
-  int _frames = 0;
-
-  void _onFrame() {
-    if (++_frames % _paintEvery == 0) _tick.value++;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _c.addListener(_onFrame);
-  }
-
-  @override
-  void dispose() {
-    _c.removeListener(_onFrame);
-    _tick.dispose();
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => RepaintBoundary(
-        child: ValueListenableBuilder<int>(
-          valueListenable: _tick,
-          child: widget.child,
-          builder: (ctx, _, child) => DecoratedBox(
-            decoration: BoxDecoration(
-              boxShadow: [
-                BoxShadow(
-                  color: widget.color.withValues(alpha: 0.55 * _a.value),
-                  blurRadius: widget.blur,
-                ),
-              ],
-            ),
-            child: child,
-          ),
-        ),
-      );
 }
 
 class GoPage extends StatelessWidget {
@@ -124,12 +28,10 @@ class GoPage extends StatelessWidget {
   final bool navPad;
   final bool topPad;
   final EdgeInsetsGeometry? padding;
-  final bool globe;
-  final bool globeActive;
 
-  /// 非空时替换整页底色并关闭光晕背景（阅读页用）。
+  /// 非空时替换整页底色（阅读页用）。
   final Color? surface;
-  const GoPage({super.key, required this.child, this.navPad = false, this.topPad = true, this.padding, this.globe = false, this.globeActive = true, this.surface});
+  const GoPage({super.key, required this.child, this.navPad = false, this.topPad = true, this.padding, this.surface});
 
   @override
   Widget build(BuildContext context) {
@@ -137,8 +39,6 @@ class GoPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: surface ?? GoPalette.of(context).bg,
       body: GoBackdrop(
-        globe: globe,
-        globeActive: globeActive,
         surface: surface,
         child: Padding(
           padding: padding ??
@@ -335,7 +235,6 @@ class _GoIconBtnState extends State<GoIconBtn> {
                     color: g.primary.withValues(alpha: 0.08),
                     shape: BoxShape.circle,
                     border: Border.all(color: g.primary.withValues(alpha: 0.28)),
-                    boxShadow: [BoxShadow(color: g.primary.withValues(alpha: 0.18), blurRadius: 8, offset: const Offset(0, 3))],
                   )
                 : null,
             child: Center(
@@ -545,7 +444,7 @@ class GoBtn extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(Go.rFull),
               border: kind == GoBtnKind.outlined ? Border.all(color: g.primary, width: 1) : null,
-              boxShadow: kind == GoBtnKind.filled && enabled ? g.glowPrimary : null,
+              boxShadow: kind == GoBtnKind.filled && enabled ? g.elev1 : null,
             ),
             child: Row(
               mainAxisSize: block ? MainAxisSize.max : MainAxisSize.min,
@@ -749,9 +648,8 @@ class GoProgress extends StatelessWidget {
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 360),
               decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [g.primary, g.secondary]),
+                color: g.primary,
                 borderRadius: BorderRadius.circular(Go.rFull),
-                boxShadow: [BoxShadow(color: g.secondary.withValues(alpha: 0.30), blurRadius: 8, offset: Offset.zero)],
               ),
             ),
           ),

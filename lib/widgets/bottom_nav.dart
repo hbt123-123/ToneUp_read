@@ -3,7 +3,6 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
-import 'package:toneup_read/widgets/go_ui.dart';
 
 /// 底部 TabBar：3 个一级入口（首页 / 收藏 / 我的），玻璃底 + 圆角胶囊。
 /// 收藏承载单词与句子（原「词汇」「句子」两个 Tab 已合并）。
@@ -28,7 +27,7 @@ class BottomNav extends StatelessWidget {
       height: Go.navH + bottom,
       child: ClipRect(
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
           child: Container(
             padding: EdgeInsets.only(left: Go.sp4, right: Go.sp4, top: Go.sp2, bottom: Go.sp2 + bottom),
             decoration: BoxDecoration(
@@ -80,6 +79,6 @@ class BottomNav extends StatelessWidget {
         ],
       ),
     );
-    return on ? GoGlowPulse(color: g.primary, child: pill) : pill;
+    return pill;
   }
 }

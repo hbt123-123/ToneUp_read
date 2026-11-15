@@ -10,7 +10,7 @@ import 'tts_voices.dart';
 class AppConfigService extends ChangeNotifier {
   SharedPreferences? _prefs;
   bool _secureOk = !Platform.environment.containsKey('FLUTTER_TEST');
-  bool _darkMode = true;
+  bool _darkMode = false;
   // 阅读设置（对齐 store.reader）
   double _fontSize = 18;
   double _lineHeight = 1.8;
@@ -109,7 +109,7 @@ class AppConfigService extends ChangeNotifier {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    _darkMode = _prefs!.getBool('dark_mode') ?? true;
+    _darkMode = _prefs!.getBool('dark_mode') ?? false;
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
     _readerFont = normalizeReaderFont(_prefs!.getString('reader_font'));

@@ -25,8 +25,8 @@ class CountingDb extends DbService {
   Future<void> clearAll() async {}
 }
 
-/// 词汇页带地球动效（GoGlobe 里AnimationController..repeat()，105 秒一轮，永不停），
-/// `pumpAndSettle` 会一直等到超时。这里统一用固定时长 pump 代替。
+/// 统一固定时长 pump：越过 400ms 防抖 + 异步查询，时长确定不超时。
+/// （历史上的辉光/地球常驻动画已随视觉减噪移除，此约定保留。）
 Future<void> _settle(WidgetTester tester) async {
   await tester.pump(); // 触发 build
   await tester.pump(const Duration(milliseconds: 600)); // 越过 400ms 防抖 + 异步查询

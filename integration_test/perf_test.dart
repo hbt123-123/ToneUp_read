@@ -14,7 +14,6 @@ import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/services/vocab_service.dart';
 import 'package:toneup_read/theme/app_theme.dart';
 import 'package:toneup_read/widgets/bottom_nav.dart';
-import 'package:toneup_read/widgets/go_ui.dart';
 
 // 播种规模（模拟重度使用者）
 const int _seedHeads = 300; // 词条数
@@ -28,7 +27,7 @@ double _pct(List<double> v, double p) =>
 Future<List<FrameTiming>> _measureFrames(WidgetTester tester, Widget app, {int frames = 90}) async {
   await tester.pumpWidget(app);
   await tester.pump();
-  await Future<void>.delayed(const Duration(milliseconds: 400)); // 等陆地 GeoJSON 载入
+  await Future<void>.delayed(const Duration(milliseconds: 400)); // 等首帧与异步资源稳定
   final t = <FrameTiming>[];
   void cb(List<FrameTiming> x) => t.addAll(x);
   WidgetsBinding.instance.addTimingsCallback(cb);
@@ -170,23 +169,7 @@ void main() {
         'max=${raster.isEmpty ? 0 : raster.last.toStringAsFixed(2)}ms | '
         'missed(>16.7ms)=${build.where((x) => x > 16.67).length}/${raster.where((x) => x > 16.67).length}');
 
-    // === F) 地球背景每帧渲染成本（首页默认激活；UI 线程 paint）===
-    Widget darkPage(bool active) => MaterialApp(
-          theme: ThemeData(brightness: Brightness.dark, useMaterial3: true),
-          home: GoPage(globe: true, globeActive: active, child: const SizedBox.expand()),
-        );
-    final gOn = (await _measureFrames(tester, darkPage(true)))
-        .map((t) => t.buildDuration.inMicroseconds / 1000.0)
-        .toList()
-      ..sort();
-    final gOff = (await _measureFrames(tester, darkPage(false)))
-        .map((t) => t.buildDuration.inMicroseconds / 1000.0)
-        .toList()
-      ..sort();
-    debugPrint('CMP globe  ON=${_avg(gOn).toStringAsFixed(2)}ms(avg)/${_pct(gOn, 0.9).toStringAsFixed(2)}ms(p90)  '
-        'OFF=${_avg(gOff).toStringAsFixed(2)}ms(avg)/${_pct(gOff, 0.9).toStringAsFixed(2)}ms(p90)');
-
-    // === G) 常驻底部导航（玻璃模糊 + 激活项脉冲）每帧成本 ===
+    // === G) 常驻底部导航（玻璃模糊）每帧成本 ===
     Future<List<double>> navFrames(Widget bar) async {
       final t = await _measureFrames(
         tester,
