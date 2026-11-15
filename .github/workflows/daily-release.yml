@@ -201,6 +201,52 @@ jobs:
             --dart-define=ARTICLE_API_KEY="$ARTICLE_API_KEY" \
             --dart-define=GATEWAY_KEY="$GATEWAY_KEY"
 
+      - name: Verify APK signature and identity
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          # 发布签名证书 SHA-256。换 keystore 时必须同步改这里，否则发布会在这里被拦下。
+          EXPECTED_CERT_SHA256: 7cf302cefc355b243adf96e1ea46fd29a5b7f79f0e944af51bb531a62cba6d32
+          EXPECTED_PACKAGE: top.toneup.read
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          test -f "$APK"
+
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(ls -1 "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1)"
+          AAPT="$(ls -1 "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -n1)"
+          if [ -z "$APKSIGNER" ] || [ -z "$AAPT" ]; then
+            echo "::error::Android SDK 中找不到 apksigner / aapt（SDK=$SDK）"
+            exit 1
+          fi
+
+          # 1) 必须能通过签名校验（v2/v3 任一即可），否则可能未签名或签名损坏。
+          "$APKSIGNER" verify --verbose "$APK" || {
+            echo "::error::APK 签名校验失败（可能未签名或签名损坏）"
+            exit 1
+          }
+
+          # 2) 证书指纹必须与发布证书一致：防止 Secrets 配错或回退到 debug 签名。
+          CERTS="$("$APKSIGNER" verify --print-certs "$APK")"
+          ACTUAL_CERT="$(printf '%s\n' "$CERTS" | awk -F': ' '/^Signer #1 certificate SHA-256 digest:/{print $2; exit}' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_CERT="$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
+            echo "::error::APK 签名证书不匹配：期望 $EXPECTED_CERT，实际 ${ACTUAL_CERT:-<未取到>}"
+            printf '%s\n' "$CERTS"
+            exit 1
+          fi
+          echo "签名证书校验通过：$ACTUAL_CERT"
+
+          # 3) 包名与 versionCode 必须与本次发布一致，避免传错产物。
+          BADGING="$("$AAPT" dump badging "$APK" | head -n1)"
+          PKG="$(printf '%s' "$BADGING" | sed -E "s/.*package: name='([^']+)'.*/\1/")"
+          VC="$(printf '%s' "$BADGING" | sed -E "s/.*versionCode='([^']+)'.*/\1/")"
+          if [ "$PKG" != "$EXPECTED_PACKAGE" ] || [ "$VC" != "$EXPECTED_VERSION_CODE" ]; then
+            echo "::error::APK 标识不匹配：package=$PKG versionCode=$VC，期望 $EXPECTED_PACKAGE / $EXPECTED_VERSION_CODE"
+            exit 1
+          fi
+          echo "包标识校验通过：$PKG / versionCode $VC"
+
       - name: Generate release assets
         if: steps.detect.outputs.changed == 'true'
         run: |
