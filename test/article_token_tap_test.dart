@@ -160,7 +160,8 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, GoPalette.dark.primary, reason: '选词模式应已开启');
+    // 阅读器用独立的 GoReaderPalette（默认夜读），与 App 主题色无关。
+    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, GoReader.night.accent, reason: '选词模式应已开启');
 
     final first = _paragraphs(tester).first;
 

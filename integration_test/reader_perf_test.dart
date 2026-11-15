@@ -89,7 +89,7 @@ Future<int> _seedArticle(DbService db, String guid, int paras) async {
 }
 
 void main() {
-  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized()!;
   final db = DbService();
   final ids = <String, int>{};
   final report = <String, Object?>{};
