@@ -27,6 +27,8 @@ ParsedLookup parseLookup(String raw) {
       final kind = '${m['kind'] ?? ''}';
       if (kind == 'dict') return ParsedLookup(card: m);
       if (kind == 'text') return ParsedLookup(text: '${m['text'] ?? ''}'.trim());
+      // 旧缓存直接存了 `/dict` 原始响应（无 kind）：按结构化词卡处理。
+      if (m['found'] is bool || m['entry'] is Map) return ParsedLookup(card: m);
     }
   } catch (_) {
     // 旧缓存里存的是裸文本：当纯文本卡片降级展示。

@@ -498,7 +498,7 @@ class GoListTile extends StatelessWidget {
                     margin: const EdgeInsets.only(right: Go.sp2),
                     decoration: BoxDecoration(color: g.primary, shape: BoxShape.circle),
                   ),
-                if (trailing != null) trailing else Icon(Icons.chevron_right, size: 18, color: g.onSurfaceDisabled),
+                trailing ?? Icon(Icons.chevron_right, size: 18, color: g.onSurfaceDisabled),
               ],
             ),
           ),

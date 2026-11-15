@@ -113,7 +113,6 @@ class HomeFeaturedCard extends StatelessWidget {
   /// 封面区：固定高度渐变背景 + 装饰圆 + 来源大写水印 + 「今日精选」角标。
   /// 背景与装饰允许固定尺寸；水印文字用 maxLines/clip（textScaler 放大也不溢出）。
   Widget _cover(BuildContext context, List<Color> colors, String source) {
-    final g = GoPalette.of(context);
     return Container(
       height: 150,
       decoration: BoxDecoration(

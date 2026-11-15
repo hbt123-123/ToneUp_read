@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -85,7 +86,7 @@ ProviderScope _scope(AppConfigService cfg, FakeDb db, Map<String, dynamic> dictR
         if (req.url.path.startsWith('/en/')) return _ok(_enArray);
         return http.Response('not found', 404);
       }))),
-      appConfigProvider.overrideWithValue(cfg),
+      appConfigProvider.overrideWith((ref) => cfg),
     ],
     child: child,
   );
@@ -132,7 +133,7 @@ Offset _firstWordCenter(WidgetTester tester) {
   final wordSpan = root.children!.whereType<TextSpan>().firstWhere((s) => s.recognizer != null);
   final rp = tester.renderObject<RenderParagraph>(find.byWidget(rich));
   final text = root.toPlainText();
-  final word = wordSpan.toPlainText()!;
+  final word = wordSpan.toPlainText();
   final start = text.indexOf(word);
   final boxes = rp.getBoxesForSelection(TextSelection(baseOffset: start, extentOffset: start + word.length));
   expect(boxes, isNotEmpty);
