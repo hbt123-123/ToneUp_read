@@ -53,14 +53,14 @@ void main() {
     await expectLater(svc.chat('s', 'u'), throwsA(isA<AppException>().having((e) => e.code, 'code', 'llmUrl')));
   });
 
-  test('429 归类为限流且会重试', () async {
+  test('429 归类为限流，且 AI 请求不再重试上游', () async {
     var calls = 0;
     final svc = await _service(MockClient((req) async {
       calls++;
       return http.Response('{"error":"rate limit"}', 429);
     }));
     await expectLater(svc.chat('s', 'u'), throwsA(isA<AppException>().having((e) => e.code, 'code', 'llmRate')));
-    expect(calls, greaterThan(1));
+    expect(calls, 1, reason: '1 秒退避救不回限流，重发只会再压一次上游');
   });
 
   test('5xx 保留可重试标记并带上网关地址', () async {
@@ -76,12 +76,22 @@ void main() {
           .having((e) => e.retryable, 'retryable', isTrue)
           .having((e) => e.message, 'message', contains(AppConfigService.defaultGatewayBase))),
     );
-    expect(calls, greaterThan(1), reason: '5xx 可重试，应按 manual 策略重发');
+    expect(calls, greaterThan(1), reason: '5xx 可重试，AI 请求只补一次重试');
   });
 
   test('返回 HTML 时是 llmFormat 而不是 FormatException', () async {
     final svc = await _service(MockClient((req) async => http.Response('<html>502 Bad Gateway</html>', 200)));
     await expectLater(svc.chat('s', 'u'), throwsA(isA<AppException>().having((e) => e.code, 'code', 'llmFormat')));
+  });
+
+  test('structured 收到不可解析的内容时抛 llmFormat，而不是裸 FormatException', () async {
+    final svc = await _service(MockClient((req) async => http.Response(_reply('not a json'), 200)));
+    await expectLater(
+      svc.structured('s', 'u'),
+      throwsA(isA<AppException>()
+          .having((e) => e.code, 'code', 'llmFormat')
+          .having((e) => e.message, 'message', contains('JSON'))),
+    );
   });
 
   test('空 content 视为失败', () async {

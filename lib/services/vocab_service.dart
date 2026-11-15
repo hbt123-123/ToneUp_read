@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:toneup_read/services/app_config_service.dart';
+import 'package:toneup_read/services/app_exception.dart';
 import 'package:toneup_read/services/db_service.dart';
 import 'package:toneup_read/services/llm_service.dart';
 
@@ -192,7 +194,12 @@ class VocabService {
         '"chunks":[{"text":"语块原文","type":"phrase|clause|idiom|fixed","note":"这个语块的意思/作用"}],'
         '"grammar":[{"point":"语法点","explain":"一句话说明"}],'
         '"keywords":[{"word":"重点词","pos":"词性","zh":"中文释义"}]}';
-    final res = await _llm.structured(sys, '请拆解并分析这句话：\n$sentence', temperature: 0.3);
+    final res = await _llm.structured(
+      sys,
+      '请拆解并分析这句话：\n$sentence',
+      temperature: 0.3,
+      model: AppConfigService.defaultGatewayAnalysisModel,
+    );
     final data = <String, dynamic>{
       'translation': res is Map ? (res['translation'] ?? '') : '',
       'chunks': (res is Map && res['chunks'] is List) ? res['chunks'] : [],
@@ -206,14 +213,24 @@ class VocabService {
     return data;
   }
 
+  /// AI 整理单批词数。分析模型 20 词约 20~50 秒，再翻倍很容易撞上网关 100 秒上限。
+  static const int organizeBatchSize = 20;
+
+  /// 单次整理最多处理的词数（3 批，按最近查询时间取）。总耗时随词数线性增长，
+  /// 一次塞几百个词既等不起，任何一批失败还会拖垮整次整理。
+  static const int organizeMaxWords = 60;
+
   /// AI 整理：把查询过的生词按主题聚类分组。
+  /// 分批请求后在本地按主题合并，避免单个超大 prompt 必然超时。
   Future<Map<String, dynamic>> organize() async {
     final wc = <Map<String, dynamic>>[];
-    for (var offset = 0; offset < 500; offset += _chunk) {
-      final rows = await _db.select('SELECT word, mode, result FROM word_cache LIMIT $_chunk OFFSET $offset');
+    for (var offset = 0; offset < organizeMaxWords; offset += _chunk) {
+      final take = organizeMaxWords - offset < _chunk ? organizeMaxWords - offset : _chunk;
+      final rows = await _db.select(
+          'SELECT word, mode, result FROM word_cache ORDER BY at DESC LIMIT $take OFFSET $offset');
       if (rows.isEmpty) break;
       wc.addAll(rows);
-      if (rows.length < _chunk) break;
+      if (rows.length < take) break;
     }
     final list = wc.map((w) {
       var hint = '';
@@ -232,11 +249,40 @@ class VocabService {
       return {'word': w['word'], 'mode': w['mode'], 'hint': hint};
     }).toList();
     const sys = '你是一个英语词汇整理助手。';
-    final prompt = '下面是一批用户在阅读中查询过的生词（JSON 数组，含 word / mode / hint）。'
-        '请按主题将生词聚类分组，并为每个词补全：lemma（词族原形小写）、pos（词性缩写）、zh（中文释义）、en（英文释义）、family（常见形态数组，含自身）、example（一个地道英文例句）。'
-        '只输出如下 JSON：{"groups":[{"theme":"...","items":[{"word":"...","lemma":"...","pos":"...","zh":"...","en":"...","family":[...],"example":"..."}]}]}\n生词列表：\n${jsonEncode(list)}';
-    final res = await _llm.structured(sys, prompt, temperature: 0.3);
-    if (res is! Map || res['groups'] is! List) throw Exception('模型返回结构异常');
-    return Map<String, dynamic>.from(res);
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (var i = 0; i < list.length; i += organizeBatchSize) {
+      final end = i + organizeBatchSize > list.length ? list.length : i + organizeBatchSize;
+      final res = await _llm.structured(
+        sys,
+        _organizePrompt(list.sublist(i, end)),
+        temperature: 0.3,
+        model: AppConfigService.defaultGatewayAnalysisModel,
+      );
+      if (res is! Map || res['groups'] is! List) {
+        throw const AppException('llmFormat', '模型返回的分组结构异常，请重试');
+      }
+      for (final g in res['groups'] as List) {
+        if (g is! Map) continue;
+        final raw = '${g['theme'] ?? ''}'.trim();
+        final theme = raw.isEmpty ? '未命名主题' : raw;
+        final items = groups.putIfAbsent(theme, () => []);
+        final rows = g['items'];
+        if (rows is List) {
+          for (final it in rows) {
+            if (it is Map) items.add(Map<String, dynamic>.from(it));
+          }
+        }
+      }
+    }
+    return {
+      'groups': [
+        for (final e in groups.entries) {'theme': e.key, 'items': e.value},
+      ],
+    };
   }
+
+  String _organizePrompt(List<Map<String, dynamic>> batch) =>
+      '下面是一批用户在阅读中查询过的生词（JSON 数组，含 word / mode / hint）。'
+      '请按主题将生词聚类分组，并为每个词补全：lemma（词族原形小写）、pos（词性缩写）、zh（中文释义）、en（英文释义）、family（常见形态数组，含自身）、example（一个地道英文例句）。'
+      '只输出如下 JSON：{"groups":[{"theme":"...","items":[{"word":"...","lemma":"...","pos":"...","zh":"...","en":"...","family":[...],"example":"..."}]}]}\n生词列表：\n${jsonEncode(batch)}';
 }

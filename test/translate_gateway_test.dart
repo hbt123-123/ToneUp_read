@@ -63,6 +63,8 @@ void main() {
     final body = jsonDecode(req.body) as Map<String, dynamic>;
     expect(body['model'], 'my-model');
     expect(body['temperature'], 0.7);
+    expect(body['max_tokens'], LlmService.maxTokens, reason: '不传 max_tokens 会让长输出被上游默认上限截断');
+    expect(body['enable_thinking'], isFalse, reason: 'Qwen3 思考模式会拖慢并破坏 JSON 输出');
     final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
     expect(messages, hasLength(2));
     expect(messages[0]['role'], 'system');
@@ -130,7 +132,7 @@ void main() {
     expect(reqs.single.url.toString(), '$_base/v1/chat/completions');
   });
 
-  test('网关 500 直接抛错（无回落），重试次数由 RetryPolicy.manual 决定', () async {
+  test('网关 500 重试一次后抛错（无回落）', () async {
     final reqs = <http.Request>[];
     final svc = await _svc(MockClient((req) async {
       reqs.add(req);
@@ -143,9 +145,9 @@ void main() {
           .having((e) => e.code, 'code', 'http500')
           .having((e) => e.retryable, 'retryable', isTrue)),
     );
-    // 源码里 LlmService.chat 固定 retry: RetryPolicy.manual（attempts:3，退避 500ms/1s/2s），
-    // 所以 5xx 会打满 3 次并最终抛错——没有任何回落引擎。
-    expect(reqs, hasLength(RetryPolicy.manual.attempts));
+    // AI 请求单次等待本来就长（LlmService.requestTimeout），只补一次重试：
+    // 打满 3 次会让用户干等好几分钟，还会重复消耗上游额度。
+    expect(reqs, hasLength(RetryPolicy.ai.attempts));
     expect(reqs.every((r) => r.url.toString() == '$_base/v1/chat/completions'), isTrue);
     expect(reqs.every((r) => r.method == 'POST'), isTrue);
   });

@@ -42,6 +42,37 @@ class _SentenceDb extends FakeDb {
   }
 }
 
+/// 只喂 word_cache 的假库：organize 会按批读取，这里忽略 LIMIT/OFFSET 全部返回。
+class _WordsDb extends FakeDb {
+  _WordsDb(this.words);
+  final List<String> words;
+
+  @override
+  Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async {
+    if (!sql.contains('FROM word_cache')) return [];
+    return [
+      for (final w in words) <String, dynamic>{'word': w, 'mode': 'en2zh', 'result': null}
+    ];
+  }
+}
+
+/// 记录 structured 透传的 model，用于断言理解型任务确实用了分析模型。
+class _SpyLlm extends LlmService {
+  _SpyLlm() : super(HttpService(), AppConfigService());
+  String? lastModel;
+
+  @override
+  Future<dynamic> structured(String system, String user, {String? model, double temperature = 0.3}) async {
+    lastModel = model;
+    return {
+      'translation': '译文',
+      'chunks': [],
+      'grammar': [],
+      'keywords': [],
+    };
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -85,6 +116,47 @@ void main() {
       final clipped = LlmService.clipArticle(long, limit: 500);
       expect(clipped.length, lessThan(500));
       expect(clipped.contains('\n'), isTrue, reason: '应在段落边界断开而不是半句话');
+    });
+  });
+
+  group('VocabService.organize（分批整理）', () {
+    test('每批 ≤20 词、用分析模型、同名主题合并', () async {
+      final bodies = <Map<String, dynamic>>[];
+      final llm = LlmService(
+        HttpService(client: MockClient((req) async {
+          bodies.add(jsonDecode(req.body) as Map<String, dynamic>);
+          return _ok({
+            'choices': [
+              {
+                'message': {'content': '{"groups":[{"theme":"学习","items":[{"word":"x"}]}]}'}
+              }
+            ]
+          });
+        })),
+        await _cfg(),
+      );
+      final svc = VocabService(_WordsDb([for (var i = 0; i < 25; i++) 'w$i']), llm);
+
+      final res = await svc.organize();
+
+      expect(bodies, hasLength(2), reason: '25 个词应拆成 20 + 5 两批');
+      expect(
+        bodies.every((b) => b['model'] == AppConfigService.defaultGatewayAnalysisModel),
+        isTrue,
+        reason: '整理必须走分析模型，翻译模型不遵守 JSON 指令',
+      );
+      final groups = res['groups'] as List;
+      expect(groups, hasLength(1), reason: '两批的同名主题应合并成一组');
+      expect((groups.first['items'] as List), hasLength(2));
+    });
+  });
+
+  group('VocabService.analyzeSentence', () {
+    test('句子拆解走分析模型', () async {
+      final llm = _SpyLlm();
+      await VocabService(FakeDb(), llm).analyzeSentence('He gave up smoking last year.');
+      expect(llm.lastModel, AppConfigService.defaultGatewayAnalysisModel,
+          reason: '混元 MT 是翻译模型，不遵守 JSON 指令，拆解会退化成散文');
     });
   });
 

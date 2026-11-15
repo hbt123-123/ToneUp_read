@@ -99,7 +99,9 @@ void main() {
     final qs = _cacheSql(db);
     expect(qs, isNotEmpty);
     for (final q in qs) {
-      expect(q, contains('LIMIT 100'), reason: '单批必须受限: $q');
+      final m = RegExp(r'LIMIT (\d+)').firstMatch(q);
+      expect(m, isNotNull, reason: '单批必须受限: $q');
+      expect(int.parse(m!.group(1)!), lessThanOrEqualTo(100), reason: '单批不能超过 100 条: $q');
     }
   });
 }

@@ -10,7 +10,16 @@ class RetryPolicy {
   final List<Duration> backoff;
   final DateTime? deadline;
 
-  const RetryPolicy({this.attempts = 1, this.backoff = const [], this.deadline});
+  /// 429 是否参与重试。AI 生成请求遇到限流时 1 秒退避没有意义，
+  /// 还会把非幂等的生成请求重复打给上游（重复计费），所以单独关掉。
+  final bool retryRateLimit;
+
+  const RetryPolicy({
+    this.attempts = 1,
+    this.backoff = const [],
+    this.deadline,
+    this.retryRateLimit = true,
+  });
 
   static const none = RetryPolicy();
   static const batch = RetryPolicy(attempts: 2, backoff: [Duration(milliseconds: 800)]);
@@ -18,6 +27,12 @@ class RetryPolicy {
     attempts: 3,
     backoff: [Duration(milliseconds: 500), Duration(seconds: 1), Duration(seconds: 2)],
   );
+
+  /// AI 生成请求：单次等待本来就长（几十秒），只补一次重试。
+  /// 网关走 Cloudflare 中转，偶发 stall / 524，重发一次通常就成功；
+  /// 沿用 manual 的 3 次会让用户干等好几分钟，还会重复消耗上游额度。
+  /// 429 限流不重试：1 秒退避救不回来，只会再打一次上游。
+  static const ai = RetryPolicy(attempts: 2, backoff: [Duration(seconds: 1)], retryRateLimit: false);
 
   static RetryPolicy until(DateTime? deadline) =>
       RetryPolicy(attempts: batch.attempts, backoff: batch.backoff, deadline: deadline);
@@ -77,11 +92,13 @@ class HttpService {
     Map<String, dynamic> body, {
     Map<String, String>? headers,
     RetryPolicy retry = RetryPolicy.none,
+    Duration? timeout,
   }) async {
     final res = await _send(
       () => _client.post(Uri.parse(url), headers: {..._jsonHeaders, ...?headers}, body: jsonEncode(body)),
       url,
       retry,
+      timeout: timeout,
     );
     return _asJson(res, url);
   }
@@ -89,9 +106,11 @@ class HttpService {
   Future<http.Response> _send(
     Future<http.Response> Function() run,
     String url,
-    RetryPolicy policy,
-  ) async {
+    RetryPolicy policy, {
+    Duration? timeout,
+  }) async {
     AppException? last;
+    final limit = timeout ?? HttpService.timeout;
     final total = policy.attempts < 1 ? 1 : policy.attempts;
     for (var i = 0; i < total; i++) {
       final dl = policy.deadline;
@@ -99,15 +118,15 @@ class HttpService {
         throw AppException('deadline', '本次刷新已超出时间预算', detail: url, retryable: true);
       }
       try {
-        final res = await run().timeout(timeout);
+        final res = await run().timeout(limit);
         if (res.statusCode >= 200 && res.statusCode < 300) return res;
         final err = _httpError(res);
-        if (!err.retryable) throw err;
+        if (!err.retryable || (!policy.retryRateLimit && res.statusCode == 429)) throw err;
         last = err;
       } on AppException {
         rethrow;
       } on TimeoutException {
-        last = AppException('timeout', '请求超时（${timeout.inSeconds} 秒）', detail: url, retryable: true);
+        last = AppException('timeout', '请求超时（${limit.inSeconds} 秒）', detail: url, retryable: true);
       } catch (e) {
         last = AppException('network', '网络请求失败', detail: '$e', retryable: true);
       }

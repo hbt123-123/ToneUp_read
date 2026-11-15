@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/services/app_exception.dart';
+import 'package:toneup_read/services/vocab_service.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 import 'package:toneup_read/widgets/go_icon.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
@@ -118,7 +119,10 @@ class _VocabOrganizeScreenState extends ConsumerState<VocabOrganizeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('AI 会按主题归类这 ${_heads.length} 个词族，并补全释义、词族与例句。',
+                Text(
+                    _heads.length > VocabService.organizeMaxWords
+                        ? 'AI 会按主题归类最近 ${VocabService.organizeMaxWords} 个词族（每次上限），并补全释义、词族与例句。'
+                        : 'AI 会按主题归类这 ${_heads.length} 个词族，并补全释义、词族与例句。',
                     style: TextStyle(fontSize: Go.fsBodySm, height: Go.lhNormal, color: g.onSurface)),
                 const SizedBox(height: Go.sp4),
                 GoBtn(
@@ -137,7 +141,7 @@ class _VocabOrganizeScreenState extends ConsumerState<VocabOrganizeScreen> {
                 children: [
                   const PolySpinner(),
                   const SizedBox(height: Go.sp3),
-                  Text('AI 正在整理…', style: TextStyle(fontSize: Go.fsMeta, color: g.onSurface3)),
+                  Text('AI 正在整理…（分批请求，词多时会慢一些）', style: TextStyle(fontSize: Go.fsMeta, color: g.onSurface3)),
                 ],
               ),
             ),

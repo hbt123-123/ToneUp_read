@@ -5,6 +5,10 @@ import 'package:toneup_read/services/llm_service.dart';
 class TranslateService {
   final LlmService _llm;
 
+  /// 短文本翻译（整词 / 标题 / 句子）的等待上限。这类请求通常几秒返回，
+  /// 不该跟着 AI 生成任务的 90 秒走，否则网关抖动时用户要盯着词卡干等。
+  static const Duration requestTimeout = Duration(seconds: 30);
+
   /// 单引擎：网关地址 / 密钥 / 模型都由 `_llm` 自行读取配置。
   TranslateService(this._llm);
 
@@ -15,6 +19,6 @@ class TranslateService {
         'never any explanation, notes, labels or markdown.';
     final user = 'Translate the following text from $from to $to.\n'
         '<<<\n$text\n>>>';
-    return (await _llm.chat(system, user)).trim();
+    return (await _llm.chat(system, user, timeout: requestTimeout)).trim();
   }
 }

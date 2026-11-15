@@ -7,10 +7,16 @@ import 'package:toneup_read/services/llm_service.dart';
 
 class _FakeLlm extends LlmService {
   final dynamic response;
+
+  /// 记录本次调用透传的 model，用于断言精选确实走了分析模型。
+  String? lastModel;
   _FakeLlm(this.response) : super(HttpService(), AppConfigService());
 
   @override
-  Future<dynamic> structured(String system, String user, {String? model, double temperature = 0.3}) async => response;
+  Future<dynamic> structured(String system, String user, {String? model, double temperature = 0.3}) async {
+    lastModel = model;
+    return response;
+  }
 }
 
 void main() {
@@ -22,8 +28,11 @@ void main() {
 
   test('模型正常返回段落时按其重建', () async {
     final blocks = [ArticleBlock(type: 'p', text: 'one long paragraph')];
-    final res = await CurateService(_FakeLlm(['short one', 'short two'])).curate(blocks);
+    final llm = _FakeLlm(['short one', 'short two']);
+    final res = await CurateService(llm).curate(blocks);
     expect(res.length, 2);
     expect(res.first.text, 'short one');
+    expect(llm.lastModel, AppConfigService.defaultGatewayAnalysisModel,
+        reason: '默认的混元 MT 会把正文整段译成中文，精选必须用分析模型');
   });
 }

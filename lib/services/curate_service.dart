@@ -1,3 +1,4 @@
+import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/models/models.dart';
 
@@ -9,7 +10,13 @@ class CurateService {
     final text = blocks.where((b) => b.type == 'p').map((b) => b.text ?? '').join('\n\n');
     final prompt =
         'Rewrite the following English passage for a Chinese learner: keep core meaning, trim redundancy, keep it readable. ${focus != null ? "Focus: $focus." : ""} Return JSON array of paragraph strings (no images).';
-    final res = await _llm.structured('You are an editor that curates English news for learners.', '$prompt\n\nTEXT:\n${LlmService.clipArticle(text)}');
+    final res = await _llm.structured(
+      'You are an editor that curates English news for learners.',
+      '$prompt\n\nTEXT:\n${LlmService.clipArticle(text)}',
+      // 默认模型是翻译特化的混元 MT：它会把正文整段译成中文而不是改写英文，
+      // 精选必须用理解型模型（Qwen3）。
+      model: AppConfigService.defaultGatewayAnalysisModel,
+    );
     List<String> paras = [];
     if (res is List) {
       paras = res.whereType<String>().toList();
